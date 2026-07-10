@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import secrets
 import socket
 import struct
@@ -158,6 +159,48 @@ def notify_action(actor: str, action: str):
             "description": f"{emoji} **{action}** por **{actor}**",
             "color": color,
         })
+    except Exception:
+        pass
+
+
+JOIN_LEAVE_RE = re.compile(r"^.+ (entro al mundo|salio del mundo)\. Jugadores online: \d+\.$")
+
+
+def cleanup_join_leave_messages():
+    """Deletes this session's player join/leave spam once the VM is
+    stopped, so the channel doesn't accumulate them play after play.
+    Best-effort: never raises, since this runs after the VM is already
+    stopped and shouldn't block or fail that response."""
+    if not DISCORD_BOT_TOKEN or not DISCORD_NOTIFY_CHANNEL_ID:
+        return
+    try:
+        messages = discord_get(f"/channels/{DISCORD_NOTIFY_CHANNEL_ID}/messages?limit=100")
+        to_delete = [
+            m["id"]
+            for m in messages
+            if (m.get("author") or {}).get("bot") and JOIN_LEAVE_RE.match(m.get("content") or "")
+        ]
+        if not to_delete:
+            return
+        if len(to_delete) == 1:
+            req = urllib.request.Request(
+                f"https://discord.com/api/v10/channels/{DISCORD_NOTIFY_CHANNEL_ID}/messages/{to_delete[0]}",
+                method="DELETE",
+                headers={"Authorization": f"Bot {DISCORD_BOT_TOKEN}", "User-Agent": "mc-discord-control"},
+            )
+        else:
+            req = urllib.request.Request(
+                f"https://discord.com/api/v10/channels/{DISCORD_NOTIFY_CHANNEL_ID}/messages/bulk-delete",
+                data=json.dumps({"messages": to_delete}).encode("utf-8"),
+                method="POST",
+                headers={
+                    "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "mc-discord-control",
+                },
+            )
+        with urllib.request.urlopen(req, timeout=20):
+            pass
     except Exception:
         pass
 
@@ -458,6 +501,7 @@ def mc_action(command: str, payload: dict) -> tuple[dict[str, Any], bool]:
             return {"embed": build_embed()}, False
         instance_stop()
         notify_action(actor, "Apagado")
+        cleanup_join_leave_messages()
         return {"embed": build_embed(actor, "Apagado")}, False
 
     return {"content": "Comando desconocido."}, True
@@ -736,4 +780,5 @@ def api_stop():
         return jsonify({"message": f"La VM ya esta {instance.get('status', 'apagada')}."})
     instance_stop()
     notify_action(claims.get("username") or "alguien (web)", "Apagado")
+    cleanup_join_leave_messages()
     return jsonify({"message": "Apagando la VM. El servicio de la VM guarda Minecraft antes de cortar energia."})
