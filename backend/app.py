@@ -260,8 +260,11 @@ def minecraft_status(host: str) -> dict[str, Any]:
         + pack_varint(1)
     )
     request_packet = pack_varint(0)
-    with socket.create_connection((host, MINECRAFT_PORT), timeout=4) as sock:
-        sock.settimeout(4)
+    # Kept short on purpose: Discord only gives us 3s total to ACK an
+    # interaction, and status_payload() falls back to a plain TCP check
+    # when this fails, so this must not eat that whole budget by itself.
+    with socket.create_connection((host, MINECRAFT_PORT), timeout=1.2) as sock:
+        sock.settimeout(1.2)
         sock.sendall(pack_varint(len(handshake)) + handshake)
         sock.sendall(pack_varint(len(request_packet)) + request_packet)
         read_varint(sock)
@@ -274,7 +277,7 @@ def minecraft_status(host: str) -> dict[str, Any]:
 
 def minecraft_port_open(host: str) -> bool:
     try:
-        with socket.create_connection((host, MINECRAFT_PORT), timeout=3):
+        with socket.create_connection((host, MINECRAFT_PORT), timeout=1):
             return True
     except OSError:
         return False
