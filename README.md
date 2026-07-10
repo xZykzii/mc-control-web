@@ -59,12 +59,13 @@ en tu aplicacion existente (la del bot):
 | `DISCORD_GUILD_ID` | ID del servidor de Discord (para validar membresia) |
 | `DISCORD_REDIRECT_URI` | `https://TU-SERVICIO-xxxxx.a.run.app/auth/discord/callback` |
 | `SESSION_SECRET` | Secreto aleatorio para firmar los tokens de sesion (`openssl rand -hex 32`) |
-| `WEB_ORIGIN` | Origen de tu GitHub Pages, ej. `https://tu-usuario.github.io` (sin barra final, sin la ruta del repo) |
+| `WEB_ORIGIN` | Origen de tu GitHub Pages para CORS, ej. `https://tu-usuario.github.io` (sin barra final, sin la ruta del repo) |
+| `WEB_APP_URL` | URL completa de la pagina, incluyendo la ruta del repo si aplica, ej. `https://tu-usuario.github.io/mc-control-web`. Ahi es a donde se redirige despues del login. Si no la seteas, usa `WEB_ORIGIN`. |
 
 ## 3. Deploy del backend (Cloud Run)
 
-Primer deploy (sin `DISCORD_REDIRECT_URI`/`WEB_ORIGIN` todavia, porque no
-conoces la URL de Cloud Run hasta que despliegas):
+Primer deploy (sin `DISCORD_REDIRECT_URI`/`WEB_ORIGIN`/`WEB_APP_URL` todavia,
+porque no conoces la URL de Cloud Run hasta que despliegas):
 
 ```bash
 cd backend
@@ -85,11 +86,11 @@ El script imprime la URL de Cloud Run al final, por ejemplo
 
 1. Vuelve al Developer Portal y agrega el redirect
    `https://mc-discord-control-xxxxx.a.run.app/auth/discord/callback`.
-2. Actualiza el servicio con las dos variables que faltaban:
+2. Actualiza el servicio con las variables que faltaban:
 
 ```bash
 gcloud run services update mc-discord-control --region us-central1 \
-  --update-env-vars "DISCORD_REDIRECT_URI=https://mc-discord-control-xxxxx.a.run.app/auth/discord/callback,WEB_ORIGIN=https://tu-usuario.github.io"
+  --update-env-vars "DISCORD_REDIRECT_URI=https://mc-discord-control-xxxxx.a.run.app/auth/discord/callback,WEB_ORIGIN=https://tu-usuario.github.io,WEB_APP_URL=https://tu-usuario.github.io/mc-control-web"
 ```
 
 Registra los comandos de Discord como antes:

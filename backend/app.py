@@ -39,6 +39,9 @@ DISCORD_GUILD_ID = os.environ.get("DISCORD_GUILD_ID", "").strip()
 DISCORD_REDIRECT_URI = os.environ.get("DISCORD_REDIRECT_URI", "").strip()
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "").strip()
 WEB_ORIGIN = os.environ.get("WEB_ORIGIN", "").strip().rstrip("/")
+# Full URL of the frontend page (may include a path, e.g. GitHub Project Pages
+# like https://user.github.io/repo). Falls back to WEB_ORIGIN when unset.
+WEB_APP_URL = os.environ.get("WEB_APP_URL", "").strip().rstrip("/") or WEB_ORIGIN
 SESSION_TTL_SECONDS = int(os.environ.get("SESSION_TTL_SECONDS", str(12 * 3600)))
 
 PING = 1
@@ -369,7 +372,10 @@ def discord_token_exchange(code: str) -> dict[str, Any]:
         "https://discord.com/api/v10/oauth2/token",
         data=payload,
         method="POST",
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": "mc-discord-control",
+        },
     )
     with urllib.request.urlopen(req, timeout=20) as resp:
         return json.loads(resp.read())
@@ -489,7 +495,7 @@ def discord_callback():
         return f"Error de autenticacion: {exc}", 502
 
     token = create_session_token(uid, me.get("username", uid), can_control)
-    resp = redirect(f"{WEB_ORIGIN}#token={token}")
+    resp = redirect(f"{WEB_APP_URL}#token={token}")
     resp.delete_cookie("oauth_state")
     return resp
 
