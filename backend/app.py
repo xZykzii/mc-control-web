@@ -263,8 +263,11 @@ def minecraft_status(host: str) -> dict[str, Any]:
     # Kept short on purpose: Discord only gives us 3s total to ACK an
     # interaction, and status_payload() falls back to a plain TCP check
     # when this fails, so this must not eat that whole budget by itself.
-    with socket.create_connection((host, MINECRAFT_PORT), timeout=1.2) as sock:
-        sock.settimeout(1.2)
+    # Backend and VM are co-located now, so this is bounded by how long
+    # the modded server itself takes to answer the status ping, not by
+    # network latency.
+    with socket.create_connection((host, MINECRAFT_PORT), timeout=2.0) as sock:
+        sock.settimeout(2.0)
         sock.sendall(pack_varint(len(handshake)) + handshake)
         sock.sendall(pack_varint(len(request_packet)) + request_packet)
         read_varint(sock)
