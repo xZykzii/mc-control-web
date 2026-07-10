@@ -452,7 +452,7 @@ def notify():
     messages = {
         "server_open": "Minecraft esta abierto y listo para entrar.",
         "server_closing": "Minecraft se esta cerrando y guardando el mundo.",
-        "server_closed": "Minecraft quedo cerrado. La VM puede apagarse para ahorrar credito.",
+        "server_closed": "Nadie jugo por un rato, asi que la VM se apago sola para ahorrar credito.",
     }
 
     if event == "player_join" and player:
@@ -468,6 +468,12 @@ def notify():
         send_channel_message(content)
     except urllib.error.HTTPError as exc:
         return f"discord error {exc.code}: {exc.read().decode('utf-8', 'ignore')}", 502
+
+    if event == "server_closed":
+        # The VM auto-stopped on its own (idle timeout), not via a /mc stop
+        # or the web page, so nothing else triggers the join/leave cleanup.
+        cleanup_join_leave_messages()
+
     return "ok"
 
 
