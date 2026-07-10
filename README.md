@@ -9,7 +9,8 @@ interacciones de Discord.
 ```
 mc-control-web/
   backend/   -> Flask app en Cloud Run (VM + Discord + login + API)
-  web/       -> sitio estatico para GitHub Pages
+  docs/      -> sitio estatico para GitHub Pages (nombre "docs" porque
+               GitHub Pages solo permite servir desde la raiz o /docs)
 ```
 
 ## Por que hace falta un backend
@@ -104,11 +105,10 @@ python3 register_commands.py
 ## 4. Publicar la pagina en GitHub Pages
 
 1. Sube este repo a GitHub.
-2. Edita [`web/config.js`](web/config.js) y pon la URL real de tu servicio de
-   Cloud Run.
-3. En GitHub: **Settings > Pages > Source**, elige la rama (ej. `main`) y la
-   carpeta `/web` (o usa GitHub Actions si prefieres desplegar desde
-   `/docs`).
+2. Edita [`docs/config.js`](docs/config.js) y pon la URL real de tu servicio
+   de Cloud Run.
+3. En GitHub: **Settings > Pages > Source > Deploy from a branch**, elige la
+   rama (ej. `master`) y la carpeta `/docs`.
 4. Tu pagina va a quedar en `https://tu-usuario.github.io/<repo>/`. Si el
    repo se llama distinto, el `WEB_ORIGIN` del backend sigue siendo solo
    `https://tu-usuario.github.io` (el origen no incluye la ruta del repo).
