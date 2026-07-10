@@ -46,20 +46,73 @@ SESSION_TTL_SECONDS = int(os.environ.get("SESSION_TTL_SECONDS", str(12 * 3600)))
 
 PING = 1
 APPLICATION_COMMAND = 2
+MESSAGE_COMPONENT = 3
 PONG = 1
 CHANNEL_MESSAGE = 4
+UPDATE_MESSAGE = 7
 EPHEMERAL = 64
 ADMINISTRATOR = 0x8
+BUTTON = 2
+ACTION_ROW = 1
+BUTTON_SECONDARY = 2
+BUTTON_SUCCESS = 3
+BUTTON_DANGER = 4
+BUTTON_PRIMARY = 1
 
 app = Flask(__name__)
 compute = discovery.build("compute", "v1", cache_discovery=False)
 
 
-def response(content: str, ephemeral: bool = False):
+def mc_buttons():
+    return [
+        {
+            "type": ACTION_ROW,
+            "components": [
+                {
+                    "type": BUTTON,
+                    "style": BUTTON_SECONDARY,
+                    "label": "Estado",
+                    "custom_id": "mc_status",
+                    "emoji": {"name": "\U0001f504"},
+                },
+                {
+                    "type": BUTTON,
+                    "style": BUTTON_SUCCESS,
+                    "label": "Encender",
+                    "custom_id": "mc_start",
+                    "emoji": {"name": "▶️"},
+                },
+                {
+                    "type": BUTTON,
+                    "style": BUTTON_DANGER,
+                    "label": "Apagar",
+                    "custom_id": "mc_stop",
+                    "emoji": {"name": "⏹️"},
+                },
+                {
+                    "type": BUTTON,
+                    "style": BUTTON_PRIMARY,
+                    "label": "IP",
+                    "custom_id": "mc_ip",
+                    "emoji": {"name": "\U0001f310"},
+                },
+            ],
+        }
+    ]
+
+
+def response(
+    content: str,
+    ephemeral: bool = False,
+    with_buttons: bool = True,
+    response_type: int = CHANNEL_MESSAGE,
+):
     data = {"content": content}
     if ephemeral:
         data["flags"] = EPHEMERAL
-    return jsonify({"type": CHANNEL_MESSAGE, "data": data})
+    if with_buttons:
+        data["components"] = mc_buttons()
+    return jsonify({"type": response_type, "data": data})
 
 
 def send_channel_message(content: str):
@@ -326,6 +379,37 @@ def notify():
     return "ok"
 
 
+def mc_action(command: str, payload: dict) -> tuple[str, bool]:
+    """Runs an /mc subcommand or button click. Returns (content, ephemeral)."""
+    if command == "status":
+        return status_text(), False
+
+    if command == "ip":
+        instance = instance_get()
+        ip = external_ip(instance)
+        address = CUSTOM_DOMAIN or ip or "sin IP externa"
+        return f"Direccion del servidor: `{address}:{MINECRAFT_PORT}`", False
+
+    if command in {"start", "stop"} and not member_can_control(payload):
+        return "No tienes permiso para controlar la VM.", True
+
+    if command == "start":
+        instance = instance_get()
+        if instance.get("status") == "RUNNING":
+            return "La VM ya esta encendida. Si Minecraft no aparece, espera a que termine de cargar.", False
+        instance_start()
+        return "Encendiendo la VM. El modpack puede tardar 3-8 minutos en quedar listo.", False
+
+    if command == "stop":
+        instance = instance_get()
+        if instance.get("status") != "RUNNING":
+            return f"La VM ya esta `{instance.get('status', 'apagada')}`.", False
+        instance_stop()
+        return "Apagando la VM. El servicio de la VM guarda Minecraft antes de cortar energia.", False
+
+    return "Comando desconocido.", True
+
+
 @app.post("/")
 def interactions():
     raw_body = request.get_data()
@@ -335,41 +419,25 @@ def interactions():
         return "invalid request signature", 401
 
     payload = request.get_json(force=True)
-    if payload.get("type") == PING:
+    itype = payload.get("type")
+
+    if itype == PING:
         return jsonify({"type": PONG})
 
-    if payload.get("type") != APPLICATION_COMMAND:
-        return response("Interaccion no soportada.", ephemeral=True)
+    if itype == APPLICATION_COMMAND:
+        content, ephemeral = mc_action(command_name(payload), payload)
+        return response(content, ephemeral=ephemeral, with_buttons=not ephemeral)
 
-    command = command_name(payload)
+    if itype == MESSAGE_COMPONENT:
+        custom_id = (payload.get("data") or {}).get("custom_id", "")
+        command = custom_id[3:] if custom_id.startswith("mc_") else ""
+        content, ephemeral = mc_action(command, payload)
+        # Permission-denied clicks get a private reply and leave the shared
+        # panel message untouched; everything else updates it in place.
+        response_type = CHANNEL_MESSAGE if ephemeral else UPDATE_MESSAGE
+        return response(content, ephemeral=ephemeral, with_buttons=not ephemeral, response_type=response_type)
 
-    if command == "status":
-        return response(status_text())
-
-    if command == "ip":
-        instance = instance_get()
-        ip = external_ip(instance)
-        address = CUSTOM_DOMAIN or ip or "sin IP externa"
-        return response(f"Direccion del servidor: `{address}:{MINECRAFT_PORT}`")
-
-    if command in {"start", "stop"} and not member_can_control(payload):
-        return response("No tienes permiso para controlar la VM.", ephemeral=True)
-
-    if command == "start":
-        instance = instance_get()
-        if instance.get("status") == "RUNNING":
-            return response("La VM ya esta encendida. Si Minecraft no aparece, espera a que termine de cargar.")
-        instance_start()
-        return response("Encendiendo la VM. El modpack puede tardar 3-8 minutos en quedar listo.")
-
-    if command == "stop":
-        instance = instance_get()
-        if instance.get("status") != "RUNNING":
-            return response(f"La VM ya esta `{instance.get('status', 'apagada')}`.")
-        instance_stop()
-        return response("Apagando la VM. El servicio de la VM guarda Minecraft antes de cortar energia.")
-
-    return response("Comando desconocido.", ephemeral=True)
+    return response("Interaccion no soportada.", ephemeral=True, with_buttons=False)
 
 
 # --- Web login (Discord OAuth2) + JSON API for the static frontend ---

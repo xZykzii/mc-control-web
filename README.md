@@ -6,6 +6,11 @@ comandos `/mc`. El backend (Cloud Run) es el mismo Flask app extendido: ahora
 tambien acepta login con Discord y expone una API JSON ademas del endpoint de
 interacciones de Discord.
 
+El bot de Discord tambien tiene botones: cualquier respuesta de `/mc status`,
+`/mc start`, `/mc stop` o `/mc ip` incluye botones (Estado / Encender /
+Apagar / IP) para seguir controlando el servidor sin volver a escribir el
+comando. Al hacer click, el mismo mensaje se actualiza con el resultado.
+
 ```
 mc-control-web/
   backend/   -> Flask app en Cloud Run (VM + Discord + login + API)
