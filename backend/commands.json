@@ -1,0 +1,29 @@
+[
+  {
+    "name": "mc",
+    "description": "Control del servidor de Minecraft",
+    "type": 1,
+    "options": [
+      {
+        "type": 1,
+        "name": "status",
+        "description": "Muestra si la VM y Minecraft estan activos"
+      },
+      {
+        "type": 1,
+        "name": "start",
+        "description": "Enciende la VM de Minecraft"
+      },
+      {
+        "type": 1,
+        "name": "stop",
+        "description": "Apaga la VM de Minecraft guardando el mundo"
+      },
+      {
+        "type": 1,
+        "name": "ip",
+        "description": "Muestra la IP o dominio del servidor"
+      }
+    ]
+  }
+]

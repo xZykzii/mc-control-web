@@ -1,0 +1,111 @@
+:root {
+  color-scheme: dark;
+  --bg: #1b1f1a;
+  --card: #262b23;
+  --accent: #5cb85c;
+  --accent-dark: #3f8f3f;
+  --text: #e9ede6;
+  --muted: #a3ac9c;
+  --danger: #c0533f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+.card {
+  width: min(420px, 90vw);
+  background: var(--card);
+  border-radius: 12px;
+  padding: 32px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+
+h1 {
+  margin-top: 0;
+  font-size: 1.4rem;
+}
+
+.hidden {
+  display: none;
+}
+
+.user {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.status {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 14px;
+  margin: 16px 0;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  white-space: pre-line;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.button {
+  display: inline-block;
+  background: var(--accent);
+  color: #10130f;
+  border: none;
+  padding: 10px 18px;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  font-size: 0.95rem;
+}
+
+.button:hover {
+  background: var(--accent-dark);
+}
+
+.button.secondary {
+  background: var(--danger);
+  color: #fff;
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.link {
+  background: none;
+  border: none;
+  color: var(--muted);
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+  font-size: 0.85rem;
+}
+
+.message {
+  min-height: 1.2em;
+  margin-top: 12px;
+  font-size: 0.9rem;
+}
+
+.message.error {
+  color: var(--danger);
+}

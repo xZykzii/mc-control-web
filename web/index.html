@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Control del servidor de Minecraft</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="card">
+    <h1>Servidor de Minecraft</h1>
+
+    <div id="logged-out" class="hidden">
+      <p>Inicia sesion con Discord para ver el estado del servidor.</p>
+      <a id="login-link" class="button" href="#">Iniciar sesion con Discord</a>
+    </div>
+
+    <div id="logged-in" class="hidden">
+      <p class="user">Conectado como <span id="username"></span> ·
+        <button id="logout" class="link">cerrar sesion</button>
+      </p>
+
+      <div id="status" class="status">Cargando estado...</div>
+
+      <div class="actions">
+        <button id="btn-start" class="button">Encender</button>
+        <button id="btn-stop" class="button secondary">Apagar</button>
+        <button id="btn-refresh" class="link">Actualizar</button>
+      </div>
+
+      <p id="message" class="message"></p>
+    </div>
+  </main>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
