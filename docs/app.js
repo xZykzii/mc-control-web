@@ -5,8 +5,12 @@
   const loggedOut = document.getElementById("logged-out");
   const loggedIn = document.getElementById("logged-in");
   const usernameEl = document.getElementById("username");
-  const statusDot = document.getElementById("status-dot");
-  const statusTitle = document.getElementById("status-title");
+  const statusOff = document.getElementById("status-off");
+  const statusOffTitle = document.getElementById("status-off-title");
+  const steps = document.getElementById("steps");
+  const stepPower = document.getElementById("step-power");
+  const stepWorld = document.getElementById("step-world");
+  const stepReady = document.getElementById("step-ready");
   const statusDetail = document.getElementById("status-detail");
   const messageEl = document.getElementById("message");
   const btnStart = document.getElementById("btn-start");
@@ -46,8 +50,8 @@
     messageEl.className = isError ? "message error" : "message";
   }
 
-  function setDot(kind) {
-    statusDot.className = `dot dot-${kind}`;
+  function setStep(el, state) {
+    el.className = state === "pending" ? "step" : `step step-${state}`;
   }
 
   function formatElapsed(ms) {
@@ -120,21 +124,26 @@
     if (tickTimer) clearInterval(tickTimer);
 
     if (data.vm_status !== "RUNNING") {
-      setDot("off");
-      statusTitle.textContent = "Apagado";
-      statusDetail.dataset.template = "";
-      statusDetail.textContent = 'Usa "Encender" para prender el servidor.';
+      statusOff.classList.remove("hidden");
+      steps.classList.add("hidden");
+      statusDetail.classList.add("hidden");
+      statusOffTitle.textContent = "Apagado";
       clearBootStart();
       schedulePoll(POLL_SLOW_MS);
       return;
     }
 
+    statusOff.classList.add("hidden");
+    steps.classList.remove("hidden");
+    statusDetail.classList.remove("hidden");
+    setStep(stepPower, "done");
+
     if (!data.minecraft_online) {
       if (getBootStart() === null) setBootStart(Date.now());
-      setDot("starting");
-      statusTitle.textContent = "Encendiendo...";
+      setStep(stepWorld, "active");
+      setStep(stepReady, "pending");
       statusDetail.dataset.template =
-        "El mundo esta cargando, puede tardar 3-8 minutos en total. Llevas {elapsed}.";
+        "Puede tardar 3-8 minutos en total. Llevas {elapsed}.";
       renderTick();
       tickTimer = setInterval(renderTick, 1000);
       schedulePoll(POLL_FAST_MS);
@@ -142,8 +151,8 @@
     }
 
     clearBootStart();
-    setDot("on");
-    statusTitle.textContent = "Listo para jugar";
+    setStep(stepWorld, "done");
+    setStep(stepReady, "done");
     statusDetail.dataset.template = "";
     if (data.status_unknown) {
       statusDetail.textContent =
@@ -179,8 +188,7 @@
     handleAction("/api/stop", "Apagando...");
   });
   btnRefresh.addEventListener("click", () => {
-    statusTitle.textContent = "Cargando estado...";
-    statusDetail.textContent = "";
+    statusDetail.textContent = "Cargando estado...";
     refreshStatus();
   });
   btnLogout.addEventListener("click", () => {
@@ -215,8 +223,10 @@
     usernameEl.textContent = claims.username || claims.uid;
     btnStart.style.display = claims.can_control ? "" : "none";
     btnStop.style.display = claims.can_control ? "" : "none";
-    statusTitle.textContent = "Cargando estado...";
-    statusDetail.textContent = "";
+    setStep(stepPower, "pending");
+    setStep(stepWorld, "pending");
+    setStep(stepReady, "pending");
+    statusDetail.textContent = "Cargando estado...";
     showMessage("", false);
     refreshStatus();
   }

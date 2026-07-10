@@ -8,30 +8,55 @@
 </head>
 <body>
   <main class="card">
-    <h1>Servidor de Minecraft</h1>
+    <div class="card-header">
+      <span class="block-icon" aria-hidden="true"></span>
+      <h1>Servidor de Minecraft</h1>
+    </div>
 
     <div id="logged-out" class="hidden">
-      <p>Inicia sesion con Discord para ver el estado del servidor.</p>
+      <p class="lead">Inicia sesion con Discord para ver el estado del servidor.</p>
       <a id="login-link" class="button" href="#">Iniciar sesion con Discord</a>
     </div>
 
     <div id="logged-in" class="hidden">
-      <p class="user">Conectado como <span id="username"></span> ·
+      <p class="user">Conectado como <strong id="username"></strong> ·
         <button id="logout" class="link">cerrar sesion</button>
       </p>
 
-      <div id="status" class="status">
-        <div class="status-row">
-          <span id="status-dot" class="dot dot-off"></span>
-          <span id="status-title">Cargando estado...</span>
+      <!-- Shown when the VM is off -->
+      <div id="status-off" class="status-off hidden">
+        <span class="dot dot-off"></span>
+        <div>
+          <div id="status-off-title" class="status-off-title">Apagado</div>
+          <div class="status-detail">Usa "Encender" para prender el servidor.</div>
         </div>
-        <div id="status-detail" class="status-detail"></div>
       </div>
 
+      <!-- Shown while booting or once ready -->
+      <ol id="steps" class="steps hidden">
+        <li class="step" id="step-power">
+          <span class="step-icon"></span>
+          <span class="step-label">VM encendida</span>
+        </li>
+        <li class="step" id="step-world">
+          <span class="step-icon"></span>
+          <div class="step-body">
+            <span class="step-label">Cargando el mundo</span>
+            <div class="progress-track"><div class="progress-bar"></div></div>
+          </div>
+        </li>
+        <li class="step" id="step-ready">
+          <span class="step-icon"></span>
+          <span class="step-label">Listo para jugar</span>
+        </li>
+      </ol>
+
+      <div id="status-detail" class="status-detail"></div>
+
       <div class="actions">
-        <button id="btn-start" class="button">Encender</button>
-        <button id="btn-stop" class="button secondary">Apagar</button>
-        <button id="btn-refresh" class="link">Actualizar</button>
+        <button id="btn-start" class="button">▶ Encender</button>
+        <button id="btn-stop" class="button secondary">■ Apagar</button>
+        <button id="btn-refresh" class="link">⟳ Actualizar</button>
       </div>
 
       <p id="message" class="message"></p>
