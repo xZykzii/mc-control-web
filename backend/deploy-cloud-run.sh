@@ -2,10 +2,10 @@
 set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:-project-e8d49f4b-11ae-4521-b23}"
-REGION="${REGION:-us-central1}"
+REGION="${REGION:-southamerica-west1}"
 SERVICE="${SERVICE:-mc-discord-control}"
 SERVICE_ACCOUNT="${SERVICE_ACCOUNT:-mc-discord-bot}"
-ZONE="${ZONE:-us-central1-c}"
+ZONE="${ZONE:-southamerica-west1-a}"
 INSTANCE="${INSTANCE:-minecraft-modpack-server}"
 
 if [[ -z "${DISCORD_PUBLIC_KEY:-}" ]]; then
