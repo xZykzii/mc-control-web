@@ -488,10 +488,12 @@ def run_deferred(command: str, payload: dict[str, Any], application_id: str, tok
         msg, _ = mc_action(command, payload)
         send_followup(application_id, token, msg)
     except Exception:
+        import traceback
+        traceback.print_exc()
         try:
             send_followup(application_id, token, {"content": "Ocurrio un error al consultar el servidor."})
         except Exception:
-            pass
+            traceback.print_exc()
 
 
 @app.post("/")
