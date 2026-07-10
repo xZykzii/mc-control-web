@@ -223,6 +223,8 @@
     usernameEl.textContent = claims.username || claims.uid;
     btnStart.style.display = claims.can_control ? "" : "none";
     btnStop.style.display = claims.can_control ? "" : "none";
+    const linkLogs = document.getElementById("link-logs");
+    if (linkLogs) linkLogs.style.display = claims.can_control ? "" : "none";
     setStep(stepPower, "pending");
     setStep(stepWorld, "pending");
     setStep(stepReady, "pending");

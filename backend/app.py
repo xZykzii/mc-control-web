@@ -3,6 +3,7 @@ import os
 import re
 import secrets
 import socket
+import ssl
 import struct
 import threading
 import time
@@ -759,6 +760,41 @@ def api_status():
     except AuthError as exc:
         return jsonify({"error": str(exc)}), exc.status
     return jsonify(status_payload())
+
+
+@app.get("/api/logs")
+def api_logs():
+    # Control-level only: the raw server log includes player IPs on join.
+    try:
+        current_claims(need_control=True)
+    except AuthError as exc:
+        return jsonify({"error": str(exc)}), exc.status
+
+    instance = instance_get()
+    if instance.get("status") != "RUNNING":
+        return jsonify({"lines": [], "vm_status": instance.get("status", "UNKNOWN")})
+
+    ip = external_ip(instance)
+    if not ip:
+        return jsonify({"lines": [], "vm_status": "RUNNING", "error": "sin IP externa"})
+
+    lines = min(max(int(request.args.get("lines", "200")), 1), 500)
+    # The log endpoint on the VM uses a self-signed cert; skip verification
+    # but keep TLS so the shared secret isn't sent in cleartext.
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    req = urllib.request.Request(
+        f"https://{ip}:8090/tail?lines={lines}",
+        headers={"X-Log-Secret": NOTIFY_SECRET, "User-Agent": "mc-discord-control"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=6, context=ctx) as resp:
+            data = json.loads(resp.read())
+    except Exception:
+        return jsonify({"lines": [], "vm_status": "RUNNING", "error": "el servidor de logs no responde"})
+    data["vm_status"] = "RUNNING"
+    return jsonify(data)
 
 
 @app.get("/api/ip")

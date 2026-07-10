@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Logs del servidor de Minecraft</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  body {
+    align-items: stretch;
+    padding: 24px;
+  }
+  .log-card {
+    width: 100%;
+    max-width: 1100px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 48px);
+  }
+  .log-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+  .log-header h1 {
+    font-size: 1.15rem;
+    margin: 0;
+    flex: 1;
+  }
+  #log-box {
+    flex: 1;
+    background: #0d0f0b;
+    border: 1px solid var(--card-border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    overflow-y: auto;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12.5px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #c8d0c0;
+  }
+  #log-box .warn { color: #e0a940; }
+  #log-box .err { color: #e0654a; }
+  #log-box .chat { color: #7fd4ff; }
+  #log-status {
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+</style>
+</head>
+<body>
+  <main class="card log-card">
+    <div class="log-header">
+      <span class="block-icon" aria-hidden="true"></span>
+      <h1>Logs del servidor</h1>
+      <span id="log-status">Conectando...</span>
+      <button id="btn-pause" class="link">Pausar</button>
+      <a href="index.html" class="link">&larr; Volver al panel</a>
+    </div>
+    <div id="log-box">Cargando...</div>
+  </main>
+
+  <script src="config.js"></script>
+  <script src="logs.js"></script>
+</body>
+</html>
