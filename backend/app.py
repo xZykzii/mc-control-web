@@ -102,12 +102,17 @@ def mc_buttons():
 
 
 def response(
-    content: str,
+    content: str | None = None,
+    embed: dict | None = None,
     ephemeral: bool = False,
     with_buttons: bool = True,
     response_type: int = CHANNEL_MESSAGE,
 ):
-    data = {"content": content}
+    data: dict[str, Any] = {}
+    if content:
+        data["content"] = content
+    if embed:
+        data["embeds"] = [embed]
     if ephemeral:
         data["flags"] = EPHEMERAL
     if with_buttons:
@@ -115,11 +120,16 @@ def response(
     return jsonify({"type": response_type, "data": data})
 
 
-def send_channel_message(content: str):
+def send_channel_message(content: str | None = None, embed: dict | None = None):
     if not DISCORD_BOT_TOKEN or not DISCORD_NOTIFY_CHANNEL_ID:
         raise RuntimeError("DISCORD_BOT_TOKEN or DISCORD_NOTIFY_CHANNEL_ID is not configured")
 
-    payload = json.dumps({"content": content}).encode("utf-8")
+    body: dict[str, Any] = {}
+    if content:
+        body["content"] = content
+    if embed:
+        body["embeds"] = [embed]
+    payload = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
         f"https://discord.com/api/v10/channels/{DISCORD_NOTIFY_CHANNEL_ID}/messages",
         data=payload,
@@ -132,6 +142,21 @@ def send_channel_message(content: str):
     )
     with urllib.request.urlopen(req, timeout=20) as resp:
         return resp.read()
+
+
+def notify_action(actor: str, action: str):
+    """Best-effort announcement of who started/stopped the VM, from either
+    the bot or the web page. Never raises: notification failures shouldn't
+    break the start/stop action itself."""
+    try:
+        emoji = "\U0001f7e2" if action == "Encendido" else "\U0001f534"
+        color = 0x6CC24A if action == "Encendido" else 0xD1573F
+        send_channel_message(embed={
+            "description": f"{emoji} **{action}** por **{actor}**",
+            "color": color,
+        })
+    except Exception:
+        pass
 
 
 def verify_notify_request():
@@ -272,6 +297,12 @@ def member_can_control(payload: dict[str, Any]) -> bool:
     return False
 
 
+def payload_actor_name(payload: dict[str, Any]) -> str:
+    member = payload.get("member") or {}
+    user = member.get("user") or payload.get("user") or {}
+    return member.get("nick") or user.get("global_name") or user.get("username") or "alguien"
+
+
 def command_name(payload: dict[str, Any]) -> str:
     data = payload.get("data") or {}
     options = data.get("options") or []
@@ -313,31 +344,43 @@ def status_payload() -> dict[str, Any]:
     return data
 
 
-def status_text() -> str:
+COLOR_OFF = 0xD1573F
+COLOR_STARTING = 0xE0A940
+COLOR_ON = 0x6CC24A
+
+
+def build_embed(actor: str | None = None, action_label: str | None = None) -> dict[str, Any]:
     data = status_payload()
     address = data["address"] or "sin IP externa"
+    fields: list[dict[str, Any]] = []
 
     if data["vm_status"] != "RUNNING":
-        return f"VM: `{data['vm_status']}`. Minecraft esta apagado. Usa `/mc start` para encenderlo."
-
-    if data["minecraft_online"] and data.get("status_unknown"):
-        return (
-            f"VM: `RUNNING`.\n"
-            f"Minecraft: el puerto `{address}:{data['port']}` responde, pero el servidor "
-            "no contesta el ping de estado (jugadores/version desconocidos)."
+        color = COLOR_OFF
+        title = "\U0001f534 Apagado"
+        description = 'Usa `/mc start` o el boton "Encender" para prenderlo.'
+    elif not data["minecraft_online"]:
+        color = COLOR_STARTING
+        title = "\U0001f7e1 Encendiendo..."
+        description = (
+            f"La VM esta prendida. El mundo esta cargando en `{address}:{data['port']}` "
+            "(puede tardar 3-8 minutos)."
         )
+    else:
+        color = COLOR_ON
+        title = "\U0001f7e2 Listo para jugar"
+        description = f"`{address}:{data['port']}`"
+        if data.get("status_unknown"):
+            fields.append({"name": "Jugadores", "value": "desconocido (ping deshabilitado)", "inline": True})
+        else:
+            players = f"{data.get('players_online', 0)}/{data.get('players_max', '?')}"
+            fields.append({"name": "Jugadores", "value": players, "inline": True})
+            if data.get("version"):
+                fields.append({"name": "Version", "value": data["version"], "inline": True})
 
-    if data["minecraft_online"]:
-        return (
-            f"VM: `RUNNING`.\n"
-            f"Minecraft: activo en `{address}:{data['port']}`.\n"
-            f"Jugadores: `{data.get('players_online', 0)}/{data.get('players_max', '?')}`.\n"
-            f"Version: `{data.get('version') or 'desconocida'}`."
-        )
-    return (
-        f"VM: `RUNNING`, pero Minecraft aun no responde en `{address}:{data['port']}`. "
-        "Si se acaba de encender, espera unos minutos por el modpack."
-    )
+    embed: dict[str, Any] = {"title": title, "description": description, "color": color, "fields": fields}
+    if actor and action_label:
+        embed["footer"] = {"text": f"{action_label} por {actor}"}
+    return embed
 
 
 @app.get("/")
@@ -379,35 +422,39 @@ def notify():
     return "ok"
 
 
-def mc_action(command: str, payload: dict) -> tuple[str, bool]:
-    """Runs an /mc subcommand or button click. Returns (content, ephemeral)."""
+def mc_action(command: str, payload: dict) -> tuple[dict[str, Any], bool]:
+    """Runs an /mc subcommand or button click. Returns (message_kwargs, ephemeral)."""
     if command == "status":
-        return status_text(), False
+        return {"embed": build_embed()}, False
 
     if command == "ip":
         instance = instance_get()
         ip = external_ip(instance)
         address = CUSTOM_DOMAIN or ip or "sin IP externa"
-        return f"Direccion del servidor: `{address}:{MINECRAFT_PORT}`", False
+        return {"content": f"Direccion del servidor: `{address}:{MINECRAFT_PORT}`"}, False
 
     if command in {"start", "stop"} and not member_can_control(payload):
-        return "No tienes permiso para controlar la VM.", True
+        return {"content": "No tienes permiso para controlar la VM."}, True
+
+    actor = payload_actor_name(payload)
 
     if command == "start":
         instance = instance_get()
         if instance.get("status") == "RUNNING":
-            return "La VM ya esta encendida. Si Minecraft no aparece, espera a que termine de cargar.", False
+            return {"embed": build_embed()}, False
         instance_start()
-        return "Encendiendo la VM. El modpack puede tardar 3-8 minutos en quedar listo.", False
+        notify_action(actor, "Encendido")
+        return {"embed": build_embed(actor, "Encendido")}, False
 
     if command == "stop":
         instance = instance_get()
         if instance.get("status") != "RUNNING":
-            return f"La VM ya esta `{instance.get('status', 'apagada')}`.", False
+            return {"embed": build_embed()}, False
         instance_stop()
-        return "Apagando la VM. El servicio de la VM guarda Minecraft antes de cortar energia.", False
+        notify_action(actor, "Apagado")
+        return {"embed": build_embed(actor, "Apagado")}, False
 
-    return "Comando desconocido.", True
+    return {"content": "Comando desconocido."}, True
 
 
 @app.post("/")
@@ -425,17 +472,17 @@ def interactions():
         return jsonify({"type": PONG})
 
     if itype == APPLICATION_COMMAND:
-        content, ephemeral = mc_action(command_name(payload), payload)
-        return response(content, ephemeral=ephemeral, with_buttons=not ephemeral)
+        msg, ephemeral = mc_action(command_name(payload), payload)
+        return response(ephemeral=ephemeral, with_buttons=not ephemeral, **msg)
 
     if itype == MESSAGE_COMPONENT:
         custom_id = (payload.get("data") or {}).get("custom_id", "")
         command = custom_id[3:] if custom_id.startswith("mc_") else ""
-        content, ephemeral = mc_action(command, payload)
+        msg, ephemeral = mc_action(command, payload)
         # Permission-denied clicks get a private reply and leave the shared
         # panel message untouched; everything else updates it in place.
         response_type = CHANNEL_MESSAGE if ephemeral else UPDATE_MESSAGE
-        return response(content, ephemeral=ephemeral, with_buttons=not ephemeral, response_type=response_type)
+        return response(ephemeral=ephemeral, with_buttons=not ephemeral, response_type=response_type, **msg)
 
     return response("Interaccion no soportada.", ephemeral=True, with_buttons=False)
 
@@ -614,24 +661,26 @@ def api_ip():
 @app.post("/api/start")
 def api_start():
     try:
-        current_claims(need_control=True)
+        claims = current_claims(need_control=True)
     except AuthError as exc:
         return jsonify({"error": str(exc)}), exc.status
     instance = instance_get()
     if instance.get("status") == "RUNNING":
         return jsonify({"message": "La VM ya esta encendida. Si Minecraft no aparece, espera a que termine de cargar."})
     instance_start()
+    notify_action(claims.get("username") or "alguien (web)", "Encendido")
     return jsonify({"message": "Encendiendo la VM. El modpack puede tardar 3-8 minutos en quedar listo."})
 
 
 @app.post("/api/stop")
 def api_stop():
     try:
-        current_claims(need_control=True)
+        claims = current_claims(need_control=True)
     except AuthError as exc:
         return jsonify({"error": str(exc)}), exc.status
     instance = instance_get()
     if instance.get("status") != "RUNNING":
         return jsonify({"message": f"La VM ya esta {instance.get('status', 'apagada')}."})
     instance_stop()
+    notify_action(claims.get("username") or "alguien (web)", "Apagado")
     return jsonify({"message": "Apagando la VM. El servicio de la VM guarda Minecraft antes de cortar energia."})
