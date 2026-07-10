@@ -145,9 +145,14 @@
     setDot("on");
     statusTitle.textContent = "Listo para jugar";
     statusDetail.dataset.template = "";
-    const version = data.version ? ` · v${data.version}` : "";
-    statusDetail.textContent =
-      `${data.address}:${data.port} · Jugadores: ${data.players_online}/${data.players_max}${version}`;
+    if (data.status_unknown) {
+      statusDetail.textContent =
+        `${data.address}:${data.port} · el servidor no informa jugadores/version (ping de estado deshabilitado), pero el puerto responde.`;
+    } else {
+      const version = data.version ? ` · v${data.version}` : "";
+      statusDetail.textContent =
+        `${data.address}:${data.port} · Jugadores: ${data.players_online}/${data.players_max}${version}`;
+    }
     schedulePoll(POLL_SLOW_MS);
   }
 

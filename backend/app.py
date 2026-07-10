@@ -194,6 +194,14 @@ def minecraft_status(host: str) -> dict[str, Any]:
         return json.loads(read_exact(sock, length).decode("utf-8"))
 
 
+def minecraft_port_open(host: str) -> bool:
+    try:
+        with socket.create_connection((host, MINECRAFT_PORT), timeout=3):
+            return True
+    except OSError:
+        return False
+
+
 def member_can_control(payload: dict[str, Any]) -> bool:
     member = payload.get("member") or {}
     user = member.get("user") or payload.get("user") or {}
@@ -240,7 +248,15 @@ def status_payload() -> dict[str, Any]:
         data["players_max"] = players.get("max")
         data["version"] = (mc.get("version") or {}).get("name")
     except Exception:
-        data["minecraft_online"] = False
+        # The server list ping can be disabled or too slow to answer even
+        # though the game port itself accepts connections just fine (e.g.
+        # enable-status=false in server.properties). Fall back to a plain
+        # TCP check so the UI doesn't get stuck showing "starting" forever.
+        if minecraft_port_open(ip):
+            data["minecraft_online"] = True
+            data["status_unknown"] = True
+        else:
+            data["minecraft_online"] = False
     return data
 
 
@@ -250,6 +266,13 @@ def status_text() -> str:
 
     if data["vm_status"] != "RUNNING":
         return f"VM: `{data['vm_status']}`. Minecraft esta apagado. Usa `/mc start` para encenderlo."
+
+    if data["minecraft_online"] and data.get("status_unknown"):
+        return (
+            f"VM: `RUNNING`.\n"
+            f"Minecraft: el puerto `{address}:{data['port']}` responde, pero el servidor "
+            "no contesta el ping de estado (jugadores/version desconocidos)."
+        )
 
     if data["minecraft_online"]:
         return (
