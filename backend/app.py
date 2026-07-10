@@ -164,22 +164,31 @@ def notify_action(actor: str, action: str):
 
 
 JOIN_LEAVE_RE = re.compile(r"^.+ (entro al mundo|salio del mundo)\. Jugadores online: \d+\.$")
+START_STOP_RE = re.compile(r"\*\*(Encendido|Apagado)\*\* por \*\*.+\*\*")
+
+
+def _is_session_noise(m: dict[str, Any]) -> bool:
+    if not (m.get("author") or {}).get("bot"):
+        return False
+    if JOIN_LEAVE_RE.match(m.get("content") or ""):
+        return True
+    embeds = m.get("embeds") or []
+    if embeds and START_STOP_RE.search(embeds[0].get("description") or ""):
+        return True
+    return False
 
 
 def cleanup_join_leave_messages():
-    """Deletes this session's player join/leave spam once the VM is
-    stopped, so the channel doesn't accumulate them play after play.
-    Best-effort: never raises, since this runs after the VM is already
-    stopped and shouldn't block or fail that response."""
+    """Deletes this session's player join/leave spam plus any earlier
+    Encendido/Apagado announcement, so the channel never accumulates more
+    than the current one. Call this BEFORE posting a new status message,
+    not after, so the fresh one isn't swept up with the old ones.
+    Best-effort: never raises."""
     if not DISCORD_BOT_TOKEN or not DISCORD_NOTIFY_CHANNEL_ID:
         return
     try:
         messages = discord_get(f"/channels/{DISCORD_NOTIFY_CHANNEL_ID}/messages?limit=100")
-        to_delete = [
-            m["id"]
-            for m in messages
-            if (m.get("author") or {}).get("bot") and JOIN_LEAVE_RE.match(m.get("content") or "")
-        ]
+        to_delete = [m["id"] for m in messages if _is_session_noise(m)]
         if not to_delete:
             return
         if len(to_delete) == 1:
@@ -464,15 +473,16 @@ def notify():
     else:
         content = messages.get(event) or str(payload.get("message") or "Evento de Minecraft.")
 
+    if event == "server_closed":
+        # The VM auto-stopped on its own (idle timeout), not via a /mc stop
+        # or the web page, so nothing else triggers this cleanup. Runs
+        # before posting so the fresh message below isn't swept up too.
+        cleanup_join_leave_messages()
+
     try:
         send_channel_message(content)
     except urllib.error.HTTPError as exc:
         return f"discord error {exc.code}: {exc.read().decode('utf-8', 'ignore')}", 502
-
-    if event == "server_closed":
-        # The VM auto-stopped on its own (idle timeout), not via a /mc stop
-        # or the web page, so nothing else triggers the join/leave cleanup.
-        cleanup_join_leave_messages()
 
     return "ok"
 
@@ -498,6 +508,7 @@ def mc_action(command: str, payload: dict) -> tuple[dict[str, Any], bool]:
         if instance.get("status") == "RUNNING":
             return {"embed": build_embed()}, False
         instance_start()
+        cleanup_join_leave_messages()
         notify_action(actor, "Encendido")
         return {"embed": build_embed(actor, "Encendido")}, False
 
@@ -506,8 +517,8 @@ def mc_action(command: str, payload: dict) -> tuple[dict[str, Any], bool]:
         if instance.get("status") != "RUNNING":
             return {"embed": build_embed()}, False
         instance_stop()
-        notify_action(actor, "Apagado")
         cleanup_join_leave_messages()
+        notify_action(actor, "Apagado")
         return {"embed": build_embed(actor, "Apagado")}, False
 
     return {"content": "Comando desconocido."}, True
@@ -771,6 +782,7 @@ def api_start():
     if instance.get("status") == "RUNNING":
         return jsonify({"message": "La VM ya esta encendida. Si Minecraft no aparece, espera a que termine de cargar."})
     instance_start()
+    cleanup_join_leave_messages()
     notify_action(claims.get("username") or "alguien (web)", "Encendido")
     return jsonify({"message": "Encendiendo la VM. El modpack puede tardar 3-8 minutos en quedar listo."})
 
@@ -785,6 +797,6 @@ def api_stop():
     if instance.get("status") != "RUNNING":
         return jsonify({"message": f"La VM ya esta {instance.get('status', 'apagada')}."})
     instance_stop()
-    notify_action(claims.get("username") or "alguien (web)", "Apagado")
     cleanup_join_leave_messages()
+    notify_action(claims.get("username") or "alguien (web)", "Apagado")
     return jsonify({"message": "Apagando la VM. El servicio de la VM guarda Minecraft antes de cortar energia."})
