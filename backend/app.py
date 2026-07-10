@@ -3,6 +3,7 @@ import os
 import secrets
 import socket
 import struct
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -49,6 +50,8 @@ APPLICATION_COMMAND = 2
 MESSAGE_COMPONENT = 3
 PONG = 1
 CHANNEL_MESSAGE = 4
+DEFERRED_CHANNEL_MESSAGE = 5
+DEFERRED_UPDATE_MESSAGE = 6
 UPDATE_MESSAGE = 7
 EPHEMERAL = 64
 ADMINISTRATOR = 0x8
@@ -260,14 +263,11 @@ def minecraft_status(host: str) -> dict[str, Any]:
         + pack_varint(1)
     )
     request_packet = pack_varint(0)
-    # Kept short on purpose: Discord only gives us 3s total to ACK an
-    # interaction, and status_payload() falls back to a plain TCP check
-    # when this fails, so this must not eat that whole budget by itself.
-    # Backend and VM are co-located now, so this is bounded by how long
-    # the modded server itself takes to answer the status ping, not by
-    # network latency.
-    with socket.create_connection((host, MINECRAFT_PORT), timeout=2.0) as sock:
-        sock.settimeout(2.0)
+    # Discord interactions are deferred (see run_deferred()), so this is no
+    # longer bounded by Discord's 3s ACK window - just generous enough to
+    # let a loaded modded server answer without waiting forever.
+    with socket.create_connection((host, MINECRAFT_PORT), timeout=5) as sock:
+        sock.settimeout(5)
         sock.sendall(pack_varint(len(handshake)) + handshake)
         sock.sendall(pack_varint(len(request_packet)) + request_packet)
         read_varint(sock)
@@ -280,7 +280,7 @@ def minecraft_status(host: str) -> dict[str, Any]:
 
 def minecraft_port_open(host: str) -> bool:
     try:
-        with socket.create_connection((host, MINECRAFT_PORT), timeout=1):
+        with socket.create_connection((host, MINECRAFT_PORT), timeout=2):
             return True
     except OSError:
         return False
@@ -463,6 +463,37 @@ def mc_action(command: str, payload: dict) -> tuple[dict[str, Any], bool]:
     return {"content": "Comando desconocido."}, True
 
 
+def send_followup(application_id: str, token: str, msg: dict[str, Any]):
+    data: dict[str, Any] = {}
+    if msg.get("content"):
+        data["content"] = msg["content"]
+    if msg.get("embed"):
+        data["embeds"] = [msg["embed"]]
+    data["components"] = mc_buttons()
+    body = json.dumps(data).encode("utf-8")
+    req = urllib.request.Request(
+        f"https://discord.com/api/v10/webhooks/{application_id}/{token}/messages/@original",
+        data=body,
+        method="PATCH",
+        headers={"Content-Type": "application/json", "User-Agent": "mc-discord-control"},
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return resp.read()
+
+
+def run_deferred(command: str, payload: dict[str, Any], application_id: str, token: str):
+    """Runs the slow part (VM/Minecraft check) after Discord already got its
+    3s ACK, then edits the deferred message with the real result."""
+    try:
+        msg, _ = mc_action(command, payload)
+        send_followup(application_id, token, msg)
+    except Exception:
+        try:
+            send_followup(application_id, token, {"content": "Ocurrio un error al consultar el servidor."})
+        except Exception:
+            pass
+
+
 @app.post("/")
 def interactions():
     raw_body = request.get_data()
@@ -478,17 +509,31 @@ def interactions():
         return jsonify({"type": PONG})
 
     if itype == APPLICATION_COMMAND:
-        msg, ephemeral = mc_action(command_name(payload), payload)
-        return response(ephemeral=ephemeral, with_buttons=not ephemeral, **msg)
+        command = command_name(payload)
+        if command in {"start", "stop"} and not member_can_control(payload):
+            return response("No tienes permiso para controlar la VM.", ephemeral=True, with_buttons=False)
+        # The VM/Minecraft check can take longer than Discord's 3s ACK
+        # window, especially under mod load, so ACK immediately and edit
+        # the message once run_deferred() finishes the real work.
+        threading.Thread(
+            target=run_deferred,
+            args=(command, payload, payload.get("application_id", ""), payload.get("token", "")),
+            daemon=True,
+        ).start()
+        return jsonify({"type": DEFERRED_CHANNEL_MESSAGE})
 
     if itype == MESSAGE_COMPONENT:
         custom_id = (payload.get("data") or {}).get("custom_id", "")
         command = custom_id[3:] if custom_id.startswith("mc_") else ""
-        msg, ephemeral = mc_action(command, payload)
-        # Permission-denied clicks get a private reply and leave the shared
-        # panel message untouched; everything else updates it in place.
-        response_type = CHANNEL_MESSAGE if ephemeral else UPDATE_MESSAGE
-        return response(ephemeral=ephemeral, with_buttons=not ephemeral, response_type=response_type, **msg)
+        if command in {"start", "stop"} and not member_can_control(payload):
+            # Private reply that leaves the shared panel message untouched.
+            return response("No tienes permiso para controlar la VM.", ephemeral=True, with_buttons=False)
+        threading.Thread(
+            target=run_deferred,
+            args=(command, payload, payload.get("application_id", ""), payload.get("token", "")),
+            daemon=True,
+        ).start()
+        return jsonify({"type": DEFERRED_UPDATE_MESSAGE})
 
     return response("Interaccion no soportada.", ephemeral=True, with_buttons=False)
 
