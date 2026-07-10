@@ -7,6 +7,7 @@
   --text: #e9ede6;
   --muted: #a3ac9c;
   --danger: #c0533f;
+  --warning: #d9a441;
 }
 
 * {
@@ -53,7 +54,48 @@ h1 {
   margin: 16px 0;
   font-size: 0.95rem;
   line-height: 1.5;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+#status-title {
+  font-weight: 600;
+}
+
+.status-detail {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.88rem;
   white-space: pre-line;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.dot-off {
+  background: var(--danger);
+}
+
+.dot-starting {
+  background: var(--warning);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.dot-on {
+  background: var(--accent);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
 
 .actions {

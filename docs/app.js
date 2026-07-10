@@ -5,12 +5,21 @@
   const loggedOut = document.getElementById("logged-out");
   const loggedIn = document.getElementById("logged-in");
   const usernameEl = document.getElementById("username");
-  const statusEl = document.getElementById("status");
+  const statusDot = document.getElementById("status-dot");
+  const statusTitle = document.getElementById("status-title");
+  const statusDetail = document.getElementById("status-detail");
   const messageEl = document.getElementById("message");
   const btnStart = document.getElementById("btn-start");
   const btnStop = document.getElementById("btn-stop");
   const btnRefresh = document.getElementById("btn-refresh");
   const btnLogout = document.getElementById("logout");
+
+  const POLL_FAST_MS = 6000; // while the VM/world is booting
+  const POLL_SLOW_MS = 25000; // steady state (on or off)
+  const BOOT_TIMER_KEY = "mc_boot_started_at";
+
+  let pollTimer = null;
+  let tickTimer = null;
 
   loginLink.href = `${API}/auth/discord/login`;
 
@@ -37,6 +46,30 @@
     messageEl.className = isError ? "message error" : "message";
   }
 
+  function setDot(kind) {
+    statusDot.className = `dot dot-${kind}`;
+  }
+
+  function formatElapsed(ms) {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const m = Math.floor(totalSeconds / 60);
+    const s = totalSeconds % 60;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  }
+
+  function getBootStart() {
+    const raw = localStorage.getItem(BOOT_TIMER_KEY);
+    return raw ? parseInt(raw, 10) : null;
+  }
+
+  function setBootStart(ts) {
+    localStorage.setItem(BOOT_TIMER_KEY, String(ts));
+  }
+
+  function clearBootStart() {
+    localStorage.removeItem(BOOT_TIMER_KEY);
+  }
+
   async function apiFetch(path, options) {
     options = options || {};
     const token = getToken();
@@ -56,30 +89,73 @@
     return data;
   }
 
+  function renderTick() {
+    const start = getBootStart();
+    if (start === null || !statusDetail.dataset.template) return;
+    statusDetail.textContent = statusDetail.dataset.template.replace(
+      "{elapsed}",
+      formatElapsed(Date.now() - start)
+    );
+  }
+
+  function schedulePoll(delayMs) {
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = setTimeout(refreshStatus, delayMs);
+  }
+
   async function refreshStatus() {
+    if (!getToken()) return;
     try {
       const data = await apiFetch("/api/status");
-      const lines = [`VM: ${data.vm_status}`];
-      if (data.minecraft_online) {
-        lines.push(`Minecraft activo en ${data.address}:${data.port}`);
-        lines.push(`Jugadores: ${data.players_online}/${data.players_max}`);
-        if (data.version) lines.push(`Version: ${data.version}`);
-      } else if (data.vm_status === "RUNNING") {
-        lines.push("Minecraft aun no responde, espera unos minutos.");
-      } else {
-        lines.push("Minecraft esta apagado.");
-      }
-      statusEl.textContent = lines.join("\n");
+      applyStatus(data);
     } catch (err) {
-      statusEl.textContent = "";
+      statusDetail.textContent = "";
+      statusDetail.dataset.template = "";
       showMessage(err.message, true);
+      schedulePoll(POLL_SLOW_MS);
     }
+  }
+
+  function applyStatus(data) {
+    if (tickTimer) clearInterval(tickTimer);
+
+    if (data.vm_status !== "RUNNING") {
+      setDot("off");
+      statusTitle.textContent = "Apagado";
+      statusDetail.dataset.template = "";
+      statusDetail.textContent = 'Usa "Encender" para prender el servidor.';
+      clearBootStart();
+      schedulePoll(POLL_SLOW_MS);
+      return;
+    }
+
+    if (!data.minecraft_online) {
+      if (getBootStart() === null) setBootStart(Date.now());
+      setDot("starting");
+      statusTitle.textContent = "Encendiendo...";
+      statusDetail.dataset.template =
+        "El mundo esta cargando, puede tardar 3-8 minutos en total. Llevas {elapsed}.";
+      renderTick();
+      tickTimer = setInterval(renderTick, 1000);
+      schedulePoll(POLL_FAST_MS);
+      return;
+    }
+
+    clearBootStart();
+    setDot("on");
+    statusTitle.textContent = "Listo para jugar";
+    statusDetail.dataset.template = "";
+    const version = data.version ? ` · v${data.version}` : "";
+    statusDetail.textContent =
+      `${data.address}:${data.port} · Jugadores: ${data.players_online}/${data.players_max}${version}`;
+    schedulePoll(POLL_SLOW_MS);
   }
 
   async function handleAction(path, busyText) {
     showMessage(busyText, false);
     btnStart.disabled = true;
     btnStop.disabled = true;
+    if (path === "/api/start") setBootStart(Date.now());
     try {
       const data = await apiFetch(path, { method: "POST" });
       showMessage(data.message, false);
@@ -93,17 +169,25 @@
   }
 
   btnStart.addEventListener("click", () => handleAction("/api/start", "Encendiendo..."));
-  btnStop.addEventListener("click", () => handleAction("/api/stop", "Apagando..."));
+  btnStop.addEventListener("click", () => {
+    clearBootStart();
+    handleAction("/api/stop", "Apagando...");
+  });
   btnRefresh.addEventListener("click", () => {
-    statusEl.textContent = "Cargando estado...";
+    statusTitle.textContent = "Cargando estado...";
+    statusDetail.textContent = "";
     refreshStatus();
   });
   btnLogout.addEventListener("click", () => {
     clearToken();
+    clearBootStart();
     render();
   });
 
   function render() {
+    if (pollTimer) clearTimeout(pollTimer);
+    if (tickTimer) clearInterval(tickTimer);
+
     const token = getToken();
     if (!token) {
       loggedOut.classList.remove("hidden");
@@ -126,7 +210,8 @@
     usernameEl.textContent = claims.username || claims.uid;
     btnStart.style.display = claims.can_control ? "" : "none";
     btnStop.style.display = claims.can_control ? "" : "none";
-    statusEl.textContent = "Cargando estado...";
+    statusTitle.textContent = "Cargando estado...";
+    statusDetail.textContent = "";
     showMessage("", false);
     refreshStatus();
   }
@@ -141,8 +226,4 @@
 
   consumeTokenFromHash();
   render();
-
-  setInterval(() => {
-    if (getToken()) refreshStatus();
-  }, 20000);
 })();
