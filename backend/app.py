@@ -249,7 +249,7 @@ def verify_discord_request(raw_body: bytes, public_key: str):
             timestamp.encode("utf-8") + raw_body,
             bytes.fromhex(signature),
         )
-    except BadSignatureError as exc:
+    except (BadSignatureError, ValueError) as exc:
         raise PermissionError("bad Discord signature") from exc
 
 
