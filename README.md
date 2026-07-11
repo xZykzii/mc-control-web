@@ -20,6 +20,26 @@ Docker separado), controlado con los comandos `/pal status`, `/pal start`,
 inactividad de Palworld se publican en el canal `palword`, en vez del canal
 de Minecraft.
 
+`/pal` vive en su **propia aplicacion/bot de Discord** (nombre e icono
+propios: "SERVER PALWORD"), separada del bot de Minecraft ("SERVER
+MINECRAFT"). Un mismo backend de Cloud Run atiende a los dos: `/` verifica
+firmas con `DISCORD_PUBLIC_KEY` (bot de Minecraft) y `/pal` verifica con
+`DISCORD_PAL_PUBLIC_KEY` (bot de Palworld). Cada aplicacion de Discord
+apunta su "Interactions Endpoint URL" a su ruta correspondiente. Los
+mensajes/anuncios de Palworld se postean con `DISCORD_PAL_BOT_TOKEN`, asi
+que aparecen como el bot de Palworld en vez del de Minecraft.
+
+Para registrar los comandos de cada bot: `commands.json` (solo `/mc`) se
+registra con las credenciales del bot de Minecraft, y `commands_pal.json`
+(solo `/pal`) con las del bot de Palworld:
+
+```
+REGISTER_APPLICATION_ID=... REGISTER_BOT_TOKEN=... DISCORD_GUILD_ID=... \
+  python register_commands.py commands.json       # bot de Minecraft
+REGISTER_APPLICATION_ID=... REGISTER_BOT_TOKEN=... DISCORD_GUILD_ID=... \
+  python register_commands.py commands_pal.json    # bot de Palworld
+```
+
 **Minecraft y Palworld no pueden estar prendidos al mismo tiempo** (la VM no
 tiene RAM para los dos juntos): si pedis `/pal start` con Minecraft
 corriendo, el bot te avisa que apagues Minecraft primero con `/mc stop`, y
@@ -90,6 +110,8 @@ en tu aplicacion existente (la del bot):
 | `WEB_ORIGIN` | Origen de tu GitHub Pages para CORS, ej. `https://tu-usuario.github.io` (sin barra final, sin la ruta del repo) |
 | `WEB_APP_URL` | URL completa de la pagina, incluyendo la ruta del repo si aplica, ej. `https://tu-usuario.github.io/mc-control-web`. Ahi es a donde se redirige despues del login. Si no la seteas, usa `WEB_ORIGIN`. |
 | `DISCORD_PALWORLD_CHANNEL_ID` | Canal donde se publican los anuncios de `/pal` (start/stop/idle). Si no la seteas, usa el mismo canal que Minecraft (`DISCORD_NOTIFY_CHANNEL_ID`). |
+| `DISCORD_PAL_PUBLIC_KEY` | Public Key de la app de Discord del bot de Palworld (verifica firmas en `/pal`) |
+| `DISCORD_PAL_BOT_TOKEN` | Token del bot de Palworld (postea/borra mensajes en `#palword` como si fuera el). Si no la seteas, usa `DISCORD_BOT_TOKEN`. |
 
 ## 3. Deploy del backend (Cloud Run)
 
