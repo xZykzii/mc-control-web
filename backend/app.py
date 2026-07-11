@@ -23,18 +23,11 @@ PROJECT_ID = os.environ.get("PROJECT_ID", "project-e8d49f4b-11ae-4521-b23")
 ZONE = os.environ.get("ZONE", "us-central1-c")
 INSTANCE = os.environ.get("INSTANCE", "minecraft-modpack-server")
 MINECRAFT_PORT = int(os.environ.get("MINECRAFT_PORT", "25565"))
-PALWORLD_PORT = int(os.environ.get("PALWORLD_PORT", "8211"))
 VM_AGENT_PORT = int(os.environ.get("VM_AGENT_PORT", "8090"))
 CUSTOM_DOMAIN = os.environ.get("CUSTOM_DOMAIN", "").strip()
 DISCORD_PUBLIC_KEY = os.environ.get("DISCORD_PUBLIC_KEY", "").strip()
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
-# Palworld runs as its own separate Discord bot/application (own name and
-# icon), so it needs its own public key (to verify /pal interactions) and
-# its own bot token (to post/delete messages as itself in #palword).
-DISCORD_PAL_PUBLIC_KEY = os.environ.get("DISCORD_PAL_PUBLIC_KEY", "").strip()
-DISCORD_PAL_BOT_TOKEN = os.environ.get("DISCORD_PAL_BOT_TOKEN", "").strip() or DISCORD_BOT_TOKEN
 DISCORD_NOTIFY_CHANNEL_ID = os.environ.get("DISCORD_NOTIFY_CHANNEL_ID", "").strip()
-DISCORD_PALWORLD_CHANNEL_ID = os.environ.get("DISCORD_PALWORLD_CHANNEL_ID", "").strip() or DISCORD_NOTIFY_CHANNEL_ID
 NOTIFY_SECRET = os.environ.get("NOTIFY_SECRET", "").strip()
 ALLOWED_ROLE_IDS = {
     role.strip() for role in os.environ.get("ALLOWED_ROLE_IDS", "").split(",") if role.strip()
@@ -134,11 +127,9 @@ def response(
     return jsonify({"type": response_type, "data": data})
 
 
-def send_channel_message(content: str | None = None, embed: dict | None = None, channel_id: str | None = None, bot_token: str | None = None):
-    channel_id = channel_id or DISCORD_NOTIFY_CHANNEL_ID
-    bot_token = bot_token or DISCORD_BOT_TOKEN
-    if not bot_token or not channel_id:
-        raise RuntimeError("bot token or channel id is not configured")
+def send_channel_message(content: str | None = None, embed: dict | None = None):
+    if not DISCORD_BOT_TOKEN or not DISCORD_NOTIFY_CHANNEL_ID:
+        raise RuntimeError("DISCORD_BOT_TOKEN or DISCORD_NOTIFY_CHANNEL_ID is not configured")
 
     body: dict[str, Any] = {}
     if content:
@@ -147,11 +138,11 @@ def send_channel_message(content: str | None = None, embed: dict | None = None, 
         body["embeds"] = [embed]
     payload = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
-        f"https://discord.com/api/v10/channels/{channel_id}/messages",
+        f"https://discord.com/api/v10/channels/{DISCORD_NOTIFY_CHANNEL_ID}/messages",
         data=payload,
         method="POST",
         headers={
-            "Authorization": f"Bot {bot_token}",
+            "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
             "Content-Type": "application/json",
             "User-Agent": "mc-discord-control",
         },
@@ -160,30 +151,35 @@ def send_channel_message(content: str | None = None, embed: dict | None = None, 
         return resp.read()
 
 
-def notify_action(actor: str, action: str, game_label: str | None = None, channel_id: str | None = None, bot_token: str | None = None):
-    """Best-effort announcement of who started/stopped a game's server,
-    from the bot or the web page. Never raises: notification failures
+def notify_action(actor: str, action: str):
+    """Best-effort announcement of who started/stopped the server, from
+    the bot or the web page. Never raises: notification failures
     shouldn't break the start/stop action itself."""
     try:
         emoji = "\U0001f7e2" if action == "Encendido" else "\U0001f534"
         color = 0x6CC24A if action == "Encendido" else 0xD1573F
-        label = f"{action} ({game_label})" if game_label else action
         send_channel_message(embed={
-            "description": f"{emoji} **{label}** por **{actor}**",
+            "description": f"{emoji} **{action}** por **{actor}**",
             "color": color,
-        }, channel_id=channel_id, bot_token=bot_token)
+        })
     except Exception:
         pass
 
 
 JOIN_LEAVE_RE = re.compile(r"^.+ (entro al mundo|salio del mundo)\. Jugadores online: \d+\.$")
-START_STOP_RE = re.compile(r"\*\*(Encendido|Apagado)(?: \([^)]+\))?\*\* por \*\*.+\*\*")
+START_STOP_RE = re.compile(r"\*\*(Encendido|Apagado)\*\* por \*\*.+\*\*")
+IDLE_STATUS_RE = re.compile(
+    r"^(Nadie jugo por un rato, asi que la VM se apago sola para ahorrar credito\."
+    r"|Minecraft esta abierto y listo para entrar\."
+    r"|Minecraft se esta cerrando y guardando el mundo\.)$"
+)
 
 
 def _is_session_noise(m: dict[str, Any]) -> bool:
     if not (m.get("author") or {}).get("bot"):
         return False
-    if JOIN_LEAVE_RE.match(m.get("content") or ""):
+    content = m.get("content") or ""
+    if JOIN_LEAVE_RE.match(content) or IDLE_STATUS_RE.match(content):
         return True
     embeds = m.get("embeds") or []
     if embeds and START_STOP_RE.search(embeds[0].get("description") or ""):
@@ -191,34 +187,32 @@ def _is_session_noise(m: dict[str, Any]) -> bool:
     return False
 
 
-def cleanup_join_leave_messages(channel_id: str | None = None, bot_token: str | None = None):
+def cleanup_join_leave_messages():
     """Deletes this session's player join/leave spam plus any earlier
     Encendido/Apagado announcement, so the channel never accumulates more
     than the current one. Call this BEFORE posting a new status message,
     not after, so the fresh one isn't swept up with the old ones.
     Best-effort: never raises."""
-    channel_id = channel_id or DISCORD_NOTIFY_CHANNEL_ID
-    bot_token = bot_token or DISCORD_BOT_TOKEN
-    if not bot_token or not channel_id:
+    if not DISCORD_BOT_TOKEN or not DISCORD_NOTIFY_CHANNEL_ID:
         return
     try:
-        messages = discord_get(f"/channels/{channel_id}/messages?limit=100", bot_token=bot_token)
+        messages = discord_get(f"/channels/{DISCORD_NOTIFY_CHANNEL_ID}/messages?limit=100")
         to_delete = [m["id"] for m in messages if _is_session_noise(m)]
         if not to_delete:
             return
         if len(to_delete) == 1:
             req = urllib.request.Request(
-                f"https://discord.com/api/v10/channels/{channel_id}/messages/{to_delete[0]}",
+                f"https://discord.com/api/v10/channels/{DISCORD_NOTIFY_CHANNEL_ID}/messages/{to_delete[0]}",
                 method="DELETE",
-                headers={"Authorization": f"Bot {bot_token}", "User-Agent": "mc-discord-control"},
+                headers={"Authorization": f"Bot {DISCORD_BOT_TOKEN}", "User-Agent": "mc-discord-control"},
             )
         else:
             req = urllib.request.Request(
-                f"https://discord.com/api/v10/channels/{channel_id}/messages/bulk-delete",
+                f"https://discord.com/api/v10/channels/{DISCORD_NOTIFY_CHANNEL_ID}/messages/bulk-delete",
                 data=json.dumps({"messages": to_delete}).encode("utf-8"),
                 method="POST",
                 headers={
-                    "Authorization": f"Bot {bot_token}",
+                    "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
                     "Content-Type": "application/json",
                     "User-Agent": "mc-discord-control",
                 },
@@ -239,13 +233,13 @@ def verify_notify_request():
             raise PermissionError("bad notify secret")
 
 
-def verify_discord_request(raw_body: bytes, public_key: str):
-    if not public_key:
-        raise RuntimeError("Discord public key is not configured")
+def verify_discord_request(raw_body: bytes):
+    if not DISCORD_PUBLIC_KEY:
+        raise RuntimeError("DISCORD_PUBLIC_KEY is not configured")
     signature = request.headers.get("X-Signature-Ed25519", "")
     timestamp = request.headers.get("X-Signature-Timestamp", "")
     try:
-        VerifyKey(bytes.fromhex(public_key)).verify(
+        VerifyKey(bytes.fromhex(DISCORD_PUBLIC_KEY)).verify(
             timestamp.encode("utf-8") + raw_body,
             bytes.fromhex(signature),
         )
@@ -293,7 +287,6 @@ _AGENT_SSL_CONTEXT.check_hostname = False
 _AGENT_SSL_CONTEXT.verify_mode = ssl.CERT_NONE
 
 CRAFTY_CONTAINER = "crafty_container"
-PALWORLD_CONTAINER = "palworld"
 
 
 def agent_get(ip: str, path: str, timeout: float = 8) -> Any:
@@ -342,13 +335,6 @@ def container_stop(ip: str, name: str) -> bool:
         return False
 
 
-def palworld_online_count(ip: str) -> int | None:
-    try:
-        return agent_get(ip, "/palworld/players").get("online")
-    except Exception:
-        return None
-
-
 def wait_for_agent(timeout: int = 240) -> str:
     """Polls the VM until it's RUNNING and the control agent answers.
     Returns the external IP, or '' if it never came up in time."""
@@ -359,7 +345,7 @@ def wait_for_agent(timeout: int = 240) -> str:
             ip = external_ip(instance)
             if ip:
                 try:
-                    agent_get(ip, "/container/status?name=palworld", timeout=4)
+                    agent_get(ip, f"/container/status?name={CRAFTY_CONTAINER}", timeout=4)
                     return ip
                 except Exception:
                     pass
@@ -466,10 +452,6 @@ def command_name(payload: dict[str, Any]) -> str:
     return ""
 
 
-def top_command_name(payload: dict[str, Any]) -> str:
-    return (payload.get("data") or {}).get("name", "")
-
-
 def status_payload() -> dict[str, Any]:
     instance = instance_get()
     vm_status = instance.get("status", "UNKNOWN")
@@ -542,147 +524,6 @@ def build_embed(actor: str | None = None, action_label: str | None = None) -> di
     return embed
 
 
-def pal_buttons():
-    return [
-        {
-            "type": ACTION_ROW,
-            "components": [
-                {
-                    "type": BUTTON,
-                    "style": BUTTON_SECONDARY,
-                    "label": "Estado",
-                    "custom_id": "pal_status",
-                    "emoji": {"name": "\U0001f504"},
-                },
-                {
-                    "type": BUTTON,
-                    "style": BUTTON_SUCCESS,
-                    "label": "Encender",
-                    "custom_id": "pal_start",
-                    "emoji": {"name": "▶️"},
-                },
-                {
-                    "type": BUTTON,
-                    "style": BUTTON_DANGER,
-                    "label": "Apagar",
-                    "custom_id": "pal_stop",
-                    "emoji": {"name": "⏹️"},
-                },
-                {
-                    "type": BUTTON,
-                    "style": BUTTON_PRIMARY,
-                    "label": "IP",
-                    "custom_id": "pal_ip",
-                    "emoji": {"name": "\U0001f310"},
-                },
-            ],
-        }
-    ]
-
-
-def pal_status_payload() -> dict[str, Any]:
-    instance = instance_get()
-    vm_status = instance.get("status", "UNKNOWN")
-    ip = external_ip(instance)
-    address = CUSTOM_DOMAIN or ip or ""
-    data: dict[str, Any] = {
-        "vm_status": vm_status,
-        "address": address,
-        "port": PALWORLD_PORT,
-        "running": False,
-        "online": None,
-    }
-    if vm_status != "RUNNING" or not ip:
-        return data
-    if container_status(ip, PALWORLD_CONTAINER) != "running":
-        return data
-    data["running"] = True
-    data["online"] = palworld_online_count(ip)
-    return data
-
-
-def pal_build_embed(actor: str | None = None, action_label: str | None = None) -> dict[str, Any]:
-    data = pal_status_payload()
-    address = data["address"] or "sin IP externa"
-    fields: list[dict[str, Any]] = []
-
-    if data["vm_status"] != "RUNNING" or not data["running"]:
-        color = COLOR_OFF
-        title = "\U0001f534 Apagado"
-        description = 'Usa `/pal start` o el boton "Encender" para prenderlo.'
-    elif data["online"] is None:
-        color = COLOR_STARTING
-        title = "\U0001f7e1 Encendiendo..."
-        description = f"El servidor esta arrancando en `{address}:{data['port']}` (puede tardar 1-2 minutos)."
-    else:
-        color = COLOR_ON
-        title = "\U0001f7e2 Listo para jugar"
-        description = f"`{address}:{data['port']}` · crossplay Steam + Xbox"
-        fields.append({"name": "Jugadores", "value": str(data["online"]), "inline": True})
-
-    embed: dict[str, Any] = {"title": title, "description": description, "color": color, "fields": fields}
-    if actor and action_label:
-        embed["footer"] = {"text": f"{action_label} (Palworld) por {actor}"}
-    return embed
-
-
-def pal_action(command: str, payload: dict) -> tuple[dict[str, Any], bool]:
-    """Runs a /pal subcommand or button click. Returns (message_kwargs, ephemeral)."""
-    if command == "status":
-        return {"embed": pal_build_embed()}, False
-
-    if command == "ip":
-        instance = instance_get()
-        address = CUSTOM_DOMAIN or external_ip(instance) or "sin IP externa"
-        return {
-            "content": (
-                f"Direccion del servidor de Palworld: `{address}:{PALWORLD_PORT}`\n"
-                "Necesita la contrasena del servidor (pedisela a un admin). "
-                "En Xbox: aparece en la lista de servidores comunitarios, buscalo por nombre."
-            )
-        }, False
-
-    if command in {"start", "stop"} and not member_can_control(payload):
-        return {"content": "No tienes permiso para controlar el servidor."}, True
-
-    actor = payload_actor_name(payload)
-
-    if command == "start":
-        instance = instance_get()
-        if instance.get("status") == "RUNNING":
-            ip = external_ip(instance)
-            if ip and container_status(ip, CRAFTY_CONTAINER) == "running":
-                return {"content": "Minecraft esta prendido ahora mismo. Apagalo con `/mc stop` antes de prender Palworld (no entran los dos a la vez)."}, True
-            if ip and container_status(ip, PALWORLD_CONTAINER) == "running":
-                return {"embed": pal_build_embed()}, False
-        else:
-            instance_start()
-        ip = wait_for_agent()
-        if not ip:
-            return {"content": "La VM esta tardando en arrancar. Proba `/pal status` en un minuto."}, False
-        if container_status(ip, CRAFTY_CONTAINER) == "running":
-            return {"content": "Minecraft se adelanto y ya esta prendido. Apagalo con `/mc stop` antes de prender Palworld."}, True
-        container_start(ip, PALWORLD_CONTAINER)
-        cleanup_join_leave_messages(DISCORD_PALWORLD_CHANNEL_ID, DISCORD_PAL_BOT_TOKEN)
-        notify_action(actor, "Encendido", "Palworld", DISCORD_PALWORLD_CHANNEL_ID, DISCORD_PAL_BOT_TOKEN)
-        return {"embed": pal_build_embed(actor, "Encendido")}, False
-
-    if command == "stop":
-        instance = instance_get()
-        if instance.get("status") != "RUNNING":
-            return {"embed": pal_build_embed()}, False
-        ip = external_ip(instance)
-        if ip and container_status(ip, PALWORLD_CONTAINER) == "running":
-            container_stop(ip, PALWORLD_CONTAINER)
-        cleanup_join_leave_messages(DISCORD_PALWORLD_CHANNEL_ID, DISCORD_PAL_BOT_TOKEN)
-        notify_action(actor, "Apagado", "Palworld", DISCORD_PALWORLD_CHANNEL_ID, DISCORD_PAL_BOT_TOKEN)
-        if not ip or container_status(ip, CRAFTY_CONTAINER) != "running":
-            instance_stop()
-        return {"embed": pal_build_embed(actor, "Apagado")}, False
-
-    return {"content": "Comando desconocido."}, True
-
-
 @app.get("/")
 def health():
     return "ok"
@@ -699,18 +540,11 @@ def notify():
     event = str(payload.get("event", "")).strip()
     player = str(payload.get("player", "")).strip()
     online = payload.get("online")
-    game_key = str(payload.get("game", "")).strip()
-    game_label = GAME_LABELS.get(game_key, "")
-    notify_channel = DISCORD_PALWORLD_CHANNEL_ID if game_key == "pal" else DISCORD_NOTIFY_CHANNEL_ID
-    notify_bot_token = DISCORD_PAL_BOT_TOKEN if game_key == "pal" else DISCORD_BOT_TOKEN
 
     messages = {
         "server_open": "Minecraft esta abierto y listo para entrar.",
         "server_closing": "Minecraft se esta cerrando y guardando el mundo.",
-        "server_closed": (
-            f"Nadie jugo{f' {game_label}' if game_label else ''} por un rato, "
-            "asi que la VM se apago sola para ahorrar credito."
-        ),
+        "server_closed": "Nadie jugo por un rato, asi que la VM se apago sola para ahorrar credito.",
     }
 
     if event == "player_join" and player:
@@ -726,10 +560,10 @@ def notify():
         # The VM auto-stopped on its own (idle timeout), not via a /mc stop
         # or the web page, so nothing else triggers this cleanup. Runs
         # before posting so the fresh message below isn't swept up too.
-        cleanup_join_leave_messages(notify_channel, notify_bot_token)
+        cleanup_join_leave_messages()
 
     try:
-        send_channel_message(content, channel_id=notify_channel, bot_token=notify_bot_token)
+        send_channel_message(content)
     except urllib.error.HTTPError as exc:
         return f"discord error {exc.code}: {exc.read().decode('utf-8', 'ignore')}", 502
 
@@ -755,18 +589,11 @@ def mc_action(command: str, payload: dict) -> tuple[dict[str, Any], bool]:
     if command == "start":
         instance = instance_get()
         if instance.get("status") == "RUNNING":
-            ip = external_ip(instance)
-            if ip and container_status(ip, PALWORLD_CONTAINER) == "running":
-                return {"content": "Palworld esta prendido ahora mismo. Apagalo con `/pal stop` antes de prender Minecraft (no entran los dos a la vez)."}, True
-            if ip and container_status(ip, CRAFTY_CONTAINER) == "running":
-                return {"embed": build_embed()}, False
-        else:
-            instance_start()
+            return {"embed": build_embed()}, False
+        instance_start()
         ip = wait_for_agent()
         if not ip:
             return {"content": "La VM esta tardando en arrancar. Proba `/mc status` en un minuto."}, False
-        if container_status(ip, PALWORLD_CONTAINER) == "running":
-            return {"content": "Palworld se adelanto y ya esta prendido. Apagalo con `/pal stop` antes de prender Minecraft."}, True
         container_start(ip, CRAFTY_CONTAINER)
         cleanup_join_leave_messages()
         notify_action(actor, "Encendido")
@@ -776,30 +603,21 @@ def mc_action(command: str, payload: dict) -> tuple[dict[str, Any], bool]:
         instance = instance_get()
         if instance.get("status") != "RUNNING":
             return {"embed": build_embed()}, False
-        ip = external_ip(instance)
-        if ip and container_status(ip, CRAFTY_CONTAINER) == "running":
-            container_stop(ip, CRAFTY_CONTAINER)
         cleanup_join_leave_messages()
         notify_action(actor, "Apagado")
-        if not ip or container_status(ip, PALWORLD_CONTAINER) != "running":
-            instance_stop()
+        instance_stop()
         return {"embed": build_embed(actor, "Apagado")}, False
 
     return {"content": "Comando desconocido."}, True
 
 
-GAME_ACTIONS = {"mc": mc_action, "pal": pal_action}
-GAME_BUTTONS = {"mc": mc_buttons, "pal": pal_buttons}
-GAME_LABELS = {"mc": "Minecraft", "pal": "Palworld"}
-
-
-def send_followup(application_id: str, token: str, msg: dict[str, Any], buttons=mc_buttons):
+def send_followup(application_id: str, token: str, msg: dict[str, Any]):
     data: dict[str, Any] = {}
     if msg.get("content"):
         data["content"] = msg["content"]
     if msg.get("embed"):
         data["embeds"] = [msg["embed"]]
-    data["components"] = buttons()
+    data["components"] = mc_buttons()
     body = json.dumps(data).encode("utf-8")
     req = urllib.request.Request(
         f"https://discord.com/api/v10/webhooks/{application_id}/{token}/messages/@original",
@@ -811,36 +629,26 @@ def send_followup(application_id: str, token: str, msg: dict[str, Any], buttons=
         return resp.read()
 
 
-def run_deferred(game: str, command: str, payload: dict[str, Any], application_id: str, token: str):
+def run_deferred(command: str, payload: dict[str, Any], application_id: str, token: str):
     """Runs the slow part (VM/game check) after Discord already got its 3s
     ACK, then edits the deferred message with the real result."""
-    buttons = GAME_BUTTONS[game]
     try:
-        msg, _ = GAME_ACTIONS[game](command, payload)
-        send_followup(application_id, token, msg, buttons=buttons)
+        msg, _ = mc_action(command, payload)
+        send_followup(application_id, token, msg)
     except Exception:
         import traceback
         traceback.print_exc()
         try:
-            send_followup(application_id, token, {"content": "Ocurrio un error al consultar el servidor."}, buttons=buttons)
+            send_followup(application_id, token, {"content": "Ocurrio un error al consultar el servidor."})
         except Exception:
             traceback.print_exc()
 
 
 @app.post("/")
 def interactions():
-    return handle_interactions(DISCORD_PUBLIC_KEY)
-
-
-@app.post("/pal")
-def pal_interactions():
-    return handle_interactions(DISCORD_PAL_PUBLIC_KEY)
-
-
-def handle_interactions(public_key: str):
     raw_body = request.get_data()
     try:
-        verify_discord_request(raw_body, public_key)
+        verify_discord_request(raw_body)
     except PermissionError:
         return "invalid request signature", 401
 
@@ -851,39 +659,36 @@ def handle_interactions(public_key: str):
         return jsonify({"type": PONG})
 
     if itype == APPLICATION_COMMAND:
-        game = top_command_name(payload)
-        if game not in GAME_ACTIONS:
-            return response("Comando no soportado.", ephemeral=True, with_buttons=False)
         command = command_name(payload)
         if command in {"start", "stop"} and not member_can_control(payload):
             return response(
-                f"No tienes permiso para controlar el servidor de {GAME_LABELS[game]}.",
+                "No tienes permiso para controlar la VM.",
                 ephemeral=True, with_buttons=False,
             )
-        # The VM/game check can take longer than Discord's 3s ACK window,
+        # The VM check can take longer than Discord's 3s ACK window,
         # especially under load, so ACK immediately and edit the message
         # once run_deferred() finishes the real work.
         threading.Thread(
             target=run_deferred,
-            args=(game, command, payload, payload.get("application_id", ""), payload.get("token", "")),
+            args=(command, payload, payload.get("application_id", ""), payload.get("token", "")),
             daemon=True,
         ).start()
         return jsonify({"type": DEFERRED_CHANNEL_MESSAGE})
 
     if itype == MESSAGE_COMPONENT:
         custom_id = (payload.get("data") or {}).get("custom_id", "")
-        game, _, command = custom_id.partition("_")
-        if game not in GAME_ACTIONS or not command:
+        _, _, command = custom_id.partition("_")
+        if not command:
             return response("Interaccion no soportada.", ephemeral=True, with_buttons=False)
         if command in {"start", "stop"} and not member_can_control(payload):
             # Private reply that leaves the shared panel message untouched.
             return response(
-                f"No tienes permiso para controlar el servidor de {GAME_LABELS[game]}.",
+                "No tienes permiso para controlar la VM.",
                 ephemeral=True, with_buttons=False,
             )
         threading.Thread(
             target=run_deferred,
-            args=(game, command, payload, payload.get("application_id", ""), payload.get("token", "")),
+            args=(command, payload, payload.get("application_id", ""), payload.get("token", "")),
             daemon=True,
         ).start()
         return jsonify({"type": DEFERRED_UPDATE_MESSAGE})
@@ -923,9 +728,9 @@ def discord_token_exchange(code: str) -> dict[str, Any]:
         return json.loads(resp.read())
 
 
-def discord_get(path: str, *, user_token: str | None = None, bot_token: str | None = None) -> Any:
+def discord_get(path: str, *, user_token: str | None = None) -> Any:
     headers = {"User-Agent": "mc-discord-control"}
-    headers["Authorization"] = f"Bearer {user_token}" if user_token else f"Bot {bot_token or DISCORD_BOT_TOKEN}"
+    headers["Authorization"] = f"Bearer {user_token}" if user_token else f"Bot {DISCORD_BOT_TOKEN}"
     req = urllib.request.Request(f"https://discord.com/api/v10{path}", headers=headers)
     with urllib.request.urlopen(req, timeout=20) as resp:
         return json.loads(resp.read())
