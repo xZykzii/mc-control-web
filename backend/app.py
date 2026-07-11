@@ -28,6 +28,11 @@ VM_AGENT_PORT = int(os.environ.get("VM_AGENT_PORT", "8090"))
 CUSTOM_DOMAIN = os.environ.get("CUSTOM_DOMAIN", "").strip()
 DISCORD_PUBLIC_KEY = os.environ.get("DISCORD_PUBLIC_KEY", "").strip()
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
+# Palworld runs as its own separate Discord bot/application (own name and
+# icon), so it needs its own public key (to verify /pal interactions) and
+# its own bot token (to post/delete messages as itself in #palword).
+DISCORD_PAL_PUBLIC_KEY = os.environ.get("DISCORD_PAL_PUBLIC_KEY", "").strip()
+DISCORD_PAL_BOT_TOKEN = os.environ.get("DISCORD_PAL_BOT_TOKEN", "").strip() or DISCORD_BOT_TOKEN
 DISCORD_NOTIFY_CHANNEL_ID = os.environ.get("DISCORD_NOTIFY_CHANNEL_ID", "").strip()
 DISCORD_PALWORLD_CHANNEL_ID = os.environ.get("DISCORD_PALWORLD_CHANNEL_ID", "").strip() or DISCORD_NOTIFY_CHANNEL_ID
 NOTIFY_SECRET = os.environ.get("NOTIFY_SECRET", "").strip()
@@ -129,10 +134,11 @@ def response(
     return jsonify({"type": response_type, "data": data})
 
 
-def send_channel_message(content: str | None = None, embed: dict | None = None, channel_id: str | None = None):
+def send_channel_message(content: str | None = None, embed: dict | None = None, channel_id: str | None = None, bot_token: str | None = None):
     channel_id = channel_id or DISCORD_NOTIFY_CHANNEL_ID
-    if not DISCORD_BOT_TOKEN or not channel_id:
-        raise RuntimeError("DISCORD_BOT_TOKEN or channel id is not configured")
+    bot_token = bot_token or DISCORD_BOT_TOKEN
+    if not bot_token or not channel_id:
+        raise RuntimeError("bot token or channel id is not configured")
 
     body: dict[str, Any] = {}
     if content:
@@ -145,7 +151,7 @@ def send_channel_message(content: str | None = None, embed: dict | None = None, 
         data=payload,
         method="POST",
         headers={
-            "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
+            "Authorization": f"Bot {bot_token}",
             "Content-Type": "application/json",
             "User-Agent": "mc-discord-control",
         },
@@ -154,7 +160,7 @@ def send_channel_message(content: str | None = None, embed: dict | None = None, 
         return resp.read()
 
 
-def notify_action(actor: str, action: str, game_label: str | None = None, channel_id: str | None = None):
+def notify_action(actor: str, action: str, game_label: str | None = None, channel_id: str | None = None, bot_token: str | None = None):
     """Best-effort announcement of who started/stopped a game's server,
     from the bot or the web page. Never raises: notification failures
     shouldn't break the start/stop action itself."""
@@ -165,7 +171,7 @@ def notify_action(actor: str, action: str, game_label: str | None = None, channe
         send_channel_message(embed={
             "description": f"{emoji} **{label}** por **{actor}**",
             "color": color,
-        }, channel_id=channel_id)
+        }, channel_id=channel_id, bot_token=bot_token)
     except Exception:
         pass
 
@@ -185,17 +191,18 @@ def _is_session_noise(m: dict[str, Any]) -> bool:
     return False
 
 
-def cleanup_join_leave_messages(channel_id: str | None = None):
+def cleanup_join_leave_messages(channel_id: str | None = None, bot_token: str | None = None):
     """Deletes this session's player join/leave spam plus any earlier
     Encendido/Apagado announcement, so the channel never accumulates more
     than the current one. Call this BEFORE posting a new status message,
     not after, so the fresh one isn't swept up with the old ones.
     Best-effort: never raises."""
     channel_id = channel_id or DISCORD_NOTIFY_CHANNEL_ID
-    if not DISCORD_BOT_TOKEN or not channel_id:
+    bot_token = bot_token or DISCORD_BOT_TOKEN
+    if not bot_token or not channel_id:
         return
     try:
-        messages = discord_get(f"/channels/{channel_id}/messages?limit=100")
+        messages = discord_get(f"/channels/{channel_id}/messages?limit=100", bot_token=bot_token)
         to_delete = [m["id"] for m in messages if _is_session_noise(m)]
         if not to_delete:
             return
@@ -203,7 +210,7 @@ def cleanup_join_leave_messages(channel_id: str | None = None):
             req = urllib.request.Request(
                 f"https://discord.com/api/v10/channels/{channel_id}/messages/{to_delete[0]}",
                 method="DELETE",
-                headers={"Authorization": f"Bot {DISCORD_BOT_TOKEN}", "User-Agent": "mc-discord-control"},
+                headers={"Authorization": f"Bot {bot_token}", "User-Agent": "mc-discord-control"},
             )
         else:
             req = urllib.request.Request(
@@ -211,7 +218,7 @@ def cleanup_join_leave_messages(channel_id: str | None = None):
                 data=json.dumps({"messages": to_delete}).encode("utf-8"),
                 method="POST",
                 headers={
-                    "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
+                    "Authorization": f"Bot {bot_token}",
                     "Content-Type": "application/json",
                     "User-Agent": "mc-discord-control",
                 },
@@ -232,13 +239,13 @@ def verify_notify_request():
             raise PermissionError("bad notify secret")
 
 
-def verify_discord_request(raw_body: bytes):
-    if not DISCORD_PUBLIC_KEY:
-        raise RuntimeError("DISCORD_PUBLIC_KEY is not configured")
+def verify_discord_request(raw_body: bytes, public_key: str):
+    if not public_key:
+        raise RuntimeError("Discord public key is not configured")
     signature = request.headers.get("X-Signature-Ed25519", "")
     timestamp = request.headers.get("X-Signature-Timestamp", "")
     try:
-        VerifyKey(bytes.fromhex(DISCORD_PUBLIC_KEY)).verify(
+        VerifyKey(bytes.fromhex(public_key)).verify(
             timestamp.encode("utf-8") + raw_body,
             bytes.fromhex(signature),
         )
@@ -656,8 +663,8 @@ def pal_action(command: str, payload: dict) -> tuple[dict[str, Any], bool]:
         if container_status(ip, CRAFTY_CONTAINER) == "running":
             return {"content": "Minecraft se adelanto y ya esta prendido. Apagalo con `/mc stop` antes de prender Palworld."}, True
         container_start(ip, PALWORLD_CONTAINER)
-        cleanup_join_leave_messages(DISCORD_PALWORLD_CHANNEL_ID)
-        notify_action(actor, "Encendido", "Palworld", DISCORD_PALWORLD_CHANNEL_ID)
+        cleanup_join_leave_messages(DISCORD_PALWORLD_CHANNEL_ID, DISCORD_PAL_BOT_TOKEN)
+        notify_action(actor, "Encendido", "Palworld", DISCORD_PALWORLD_CHANNEL_ID, DISCORD_PAL_BOT_TOKEN)
         return {"embed": pal_build_embed(actor, "Encendido")}, False
 
     if command == "stop":
@@ -667,8 +674,8 @@ def pal_action(command: str, payload: dict) -> tuple[dict[str, Any], bool]:
         ip = external_ip(instance)
         if ip and container_status(ip, PALWORLD_CONTAINER) == "running":
             container_stop(ip, PALWORLD_CONTAINER)
-        cleanup_join_leave_messages(DISCORD_PALWORLD_CHANNEL_ID)
-        notify_action(actor, "Apagado", "Palworld", DISCORD_PALWORLD_CHANNEL_ID)
+        cleanup_join_leave_messages(DISCORD_PALWORLD_CHANNEL_ID, DISCORD_PAL_BOT_TOKEN)
+        notify_action(actor, "Apagado", "Palworld", DISCORD_PALWORLD_CHANNEL_ID, DISCORD_PAL_BOT_TOKEN)
         if not ip or container_status(ip, CRAFTY_CONTAINER) != "running":
             instance_stop()
         return {"embed": pal_build_embed(actor, "Apagado")}, False
@@ -695,6 +702,7 @@ def notify():
     game_key = str(payload.get("game", "")).strip()
     game_label = GAME_LABELS.get(game_key, "")
     notify_channel = DISCORD_PALWORLD_CHANNEL_ID if game_key == "pal" else DISCORD_NOTIFY_CHANNEL_ID
+    notify_bot_token = DISCORD_PAL_BOT_TOKEN if game_key == "pal" else DISCORD_BOT_TOKEN
 
     messages = {
         "server_open": "Minecraft esta abierto y listo para entrar.",
@@ -718,10 +726,10 @@ def notify():
         # The VM auto-stopped on its own (idle timeout), not via a /mc stop
         # or the web page, so nothing else triggers this cleanup. Runs
         # before posting so the fresh message below isn't swept up too.
-        cleanup_join_leave_messages(notify_channel)
+        cleanup_join_leave_messages(notify_channel, notify_bot_token)
 
     try:
-        send_channel_message(content, channel_id=notify_channel)
+        send_channel_message(content, channel_id=notify_channel, bot_token=notify_bot_token)
     except urllib.error.HTTPError as exc:
         return f"discord error {exc.code}: {exc.read().decode('utf-8', 'ignore')}", 502
 
@@ -821,9 +829,18 @@ def run_deferred(game: str, command: str, payload: dict[str, Any], application_i
 
 @app.post("/")
 def interactions():
+    return handle_interactions(DISCORD_PUBLIC_KEY)
+
+
+@app.post("/pal")
+def pal_interactions():
+    return handle_interactions(DISCORD_PAL_PUBLIC_KEY)
+
+
+def handle_interactions(public_key: str):
     raw_body = request.get_data()
     try:
-        verify_discord_request(raw_body)
+        verify_discord_request(raw_body, public_key)
     except PermissionError:
         return "invalid request signature", 401
 
@@ -906,9 +923,9 @@ def discord_token_exchange(code: str) -> dict[str, Any]:
         return json.loads(resp.read())
 
 
-def discord_get(path: str, *, user_token: str | None = None) -> Any:
+def discord_get(path: str, *, user_token: str | None = None, bot_token: str | None = None) -> Any:
     headers = {"User-Agent": "mc-discord-control"}
-    headers["Authorization"] = f"Bearer {user_token}" if user_token else f"Bot {DISCORD_BOT_TOKEN}"
+    headers["Authorization"] = f"Bearer {user_token}" if user_token else f"Bot {bot_token or DISCORD_BOT_TOKEN}"
     req = urllib.request.Request(f"https://discord.com/api/v10{path}", headers=headers)
     with urllib.request.urlopen(req, timeout=20) as resp:
         return json.loads(resp.read())

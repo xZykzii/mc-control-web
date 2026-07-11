@@ -5,11 +5,13 @@ import sys
 import requests
 
 
-APP_ID = os.environ["DISCORD_APPLICATION_ID"]
-BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
+COMMANDS_FILE = sys.argv[1] if len(sys.argv) > 1 else "commands.json"
+
+APP_ID = os.environ.get("REGISTER_APPLICATION_ID") or os.environ["DISCORD_APPLICATION_ID"]
+BOT_TOKEN = os.environ.get("REGISTER_BOT_TOKEN") or os.environ["DISCORD_BOT_TOKEN"]
 GUILD_ID = os.environ.get("DISCORD_GUILD_ID", "")
 
-with open("commands.json", encoding="utf-8") as f:
+with open(COMMANDS_FILE, encoding="utf-8") as f:
     commands = json.load(f)
 
 if GUILD_ID:
