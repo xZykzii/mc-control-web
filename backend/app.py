@@ -146,6 +146,45 @@ def send_channel_message(content: str | None = None, embed: dict | None = None, 
         return resp.read()
 
 
+def edit_channel_message(message_id: str, embed: dict):
+    if not DISCORD_BOT_TOKEN or not DISCORD_NOTIFY_CHANNEL_ID:
+        return
+    body = {"embeds": [embed], "components": mc_buttons()}
+    payload = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        f"https://discord.com/api/v10/channels/{DISCORD_NOTIFY_CHANNEL_ID}/messages/{message_id}",
+        data=payload,
+        method="PATCH",
+        headers={
+            "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
+            "Content-Type": "application/json",
+            "User-Agent": "mc-discord-control",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return resp.read()
+
+
+def refresh_latest_status_embed():
+    """Finds this bot's most recent status card (Apagado/Encendiendo/Listo)
+    in the channel and edits it in place with a fresh player count, so
+    people scrolling back up see live data instead of whatever the count
+    was the moment the card was first posted. Best-effort: never raises."""
+    if not DISCORD_BOT_TOKEN or not DISCORD_NOTIFY_CHANNEL_ID:
+        return
+    try:
+        messages = discord_get(f"/channels/{DISCORD_NOTIFY_CHANNEL_ID}/messages?limit=20")
+        for m in messages:
+            if not (m.get("author") or {}).get("bot"):
+                continue
+            embeds = m.get("embeds") or []
+            if embeds and embeds[0].get("title") in STATUS_EMBED_TITLES:
+                edit_channel_message(m["id"], build_embed())
+                return
+    except Exception:
+        pass
+
+
 def notify_action(actor: str, action: str):
     """Best-effort announcement of who started/stopped the server, from
     the bot or the web page. Never raises: notification failures
@@ -585,6 +624,11 @@ def notify():
         send_channel_message(content)
     except urllib.error.HTTPError as exc:
         return f"discord error {exc.code}: {exc.read().decode('utf-8', 'ignore')}", 502
+
+    if event in ("player_join", "player_leave"):
+        # Keep the pinned-feeling status card's player count live instead of
+        # frozen at whatever it was when it was first posted.
+        refresh_latest_status_embed()
 
     return "ok"
 
