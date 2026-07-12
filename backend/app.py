@@ -127,7 +127,7 @@ def response(
     return jsonify({"type": response_type, "data": data})
 
 
-def send_channel_message(content: str | None = None, embed: dict | None = None):
+def send_channel_message(content: str | None = None, embed: dict | None = None, with_buttons: bool = False):
     if not DISCORD_BOT_TOKEN or not DISCORD_NOTIFY_CHANNEL_ID:
         raise RuntimeError("DISCORD_BOT_TOKEN or DISCORD_NOTIFY_CHANNEL_ID is not configured")
 
@@ -136,6 +136,8 @@ def send_channel_message(content: str | None = None, embed: dict | None = None):
         body["content"] = content
     if embed:
         body["embeds"] = [embed]
+    if with_buttons:
+        body["components"] = mc_buttons()
     payload = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
         f"https://discord.com/api/v10/channels/{DISCORD_NOTIFY_CHANNEL_ID}/messages",
@@ -170,9 +172,11 @@ JOIN_LEAVE_RE = re.compile(r"^.+ (entro al mundo|salio del mundo)\. Jugadores on
 START_STOP_RE = re.compile(r"\*\*(Encendido|Apagado)\*\* por \*\*.+\*\*")
 IDLE_STATUS_RE = re.compile(
     r"^(Nadie jugo por un rato, asi que la VM se apago sola para ahorrar credito\."
-    r"|Minecraft esta abierto y listo para entrar\."
     r"|Minecraft se esta cerrando y guardando el mundo\.)$"
 )
+
+
+STATUS_EMBED_TITLES = {"\U0001f534 Apagado", "\U0001f7e1 Encendiendo...", "\U0001f7e2 Listo para jugar"}
 
 
 def _is_session_noise(m: dict[str, Any]) -> bool:
@@ -182,8 +186,12 @@ def _is_session_noise(m: dict[str, Any]) -> bool:
     if JOIN_LEAVE_RE.match(content) or IDLE_STATUS_RE.match(content):
         return True
     embeds = m.get("embeds") or []
-    if embeds and START_STOP_RE.search(embeds[0].get("description") or ""):
-        return True
+    if embeds:
+        embed = embeds[0]
+        if START_STOP_RE.search(embed.get("description") or ""):
+            return True
+        if embed.get("title") in STATUS_EMBED_TITLES:
+            return True
     return False
 
 
@@ -541,8 +549,19 @@ def notify():
     player = str(payload.get("player", "")).strip()
     online = payload.get("online")
 
+    if event == "server_open":
+        # The world finished loading after a start (bot, web, or someone
+        # else's /mc start) - sweep the stale "Encendiendo..." embed and
+        # post the real ready-to-play status so people don't have to poll
+        # /mc status themselves to find out.
+        cleanup_join_leave_messages()
+        try:
+            send_channel_message(embed=build_embed(), with_buttons=True)
+        except urllib.error.HTTPError as exc:
+            return f"discord error {exc.code}: {exc.read().decode('utf-8', 'ignore')}", 502
+        return "ok"
+
     messages = {
-        "server_open": "Minecraft esta abierto y listo para entrar.",
         "server_closing": "Minecraft se esta cerrando y guardando el mundo.",
         "server_closed": "Nadie jugo por un rato, asi que la VM se apago sola para ahorrar credito.",
     }
