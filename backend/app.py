@@ -76,13 +76,6 @@ def mc_buttons():
             "components": [
                 {
                     "type": BUTTON,
-                    "style": BUTTON_SECONDARY,
-                    "label": "Estado",
-                    "custom_id": "mc_status",
-                    "emoji": {"name": "\U0001f504"},
-                },
-                {
-                    "type": BUTTON,
                     "style": BUTTON_SUCCESS,
                     "label": "Encender",
                     "custom_id": "mc_start",
