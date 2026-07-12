@@ -473,18 +473,25 @@ def status_payload() -> dict[str, Any]:
     }
     if vm_status != "RUNNING":
         return data
-    try:
-        mc = minecraft_status(ip)
+    mc = None
+    for attempt in range(2):
+        try:
+            mc = minecraft_status(ip)
+            break
+        except Exception as exc:
+            print(f"minecraft_status({ip!r}) attempt {attempt + 1} failed: {type(exc).__name__}: {exc}", flush=True)
+    if mc is not None:
         players = mc.get("players", {})
         data["minecraft_online"] = True
         data["players_online"] = players.get("online", 0)
         data["players_max"] = players.get("max")
         data["version"] = (mc.get("version") or {}).get("name")
-    except Exception:
-        # The server list ping can be disabled or too slow to answer even
-        # though the game port itself accepts connections just fine (e.g.
-        # enable-status=false in server.properties). Fall back to a plain
-        # TCP check so the UI doesn't get stuck showing "starting" forever.
+    else:
+        # The server list ping can be disabled, or too slow/flaky to
+        # answer twice in a row, even though the game port itself accepts
+        # connections just fine (e.g. enable-status=false, or a heavily
+        # modded server under load). Fall back to a plain TCP check so the
+        # UI doesn't get stuck showing "starting" forever.
         if minecraft_port_open(ip):
             data["minecraft_online"] = True
             data["status_unknown"] = True
