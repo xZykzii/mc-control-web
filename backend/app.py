@@ -165,13 +165,11 @@ def edit_channel_message(message_id: str, embed: dict):
         return resp.read()
 
 
-def refresh_latest_status_embed():
-    """Finds this bot's most recent status card (Apagado/Encendiendo/Listo)
-    in the channel and edits it in place with a fresh player count, so
-    people scrolling back up see live data instead of whatever the count
-    was the moment the card was first posted. Best-effort: never raises."""
+def find_status_card_id() -> str | None:
+    """Looks for this bot's status card (Apagado/Encendiendo/Listo) in the
+    channel's recent history. Best-effort: returns None on any error."""
     if not DISCORD_BOT_TOKEN or not DISCORD_NOTIFY_CHANNEL_ID:
-        return
+        return None
     try:
         messages = discord_get(f"/channels/{DISCORD_NOTIFY_CHANNEL_ID}/messages?limit=20")
         for m in messages:
@@ -179,8 +177,24 @@ def refresh_latest_status_embed():
                 continue
             embeds = m.get("embeds") or []
             if embeds and embeds[0].get("title") in STATUS_EMBED_TITLES:
-                edit_channel_message(m["id"], build_embed())
-                return
+                return m["id"]
+    except Exception:
+        pass
+    return None
+
+
+def sync_status_card(actor: str | None = None, action_label: str | None = None):
+    """The status card is a single persistent message: this edits it in
+    place if it already exists, or creates it if this is the first time.
+    It is never deleted and reposted, so it can't "disappear" from the
+    channel or lose its place in the scrollback. Best-effort: never raises."""
+    try:
+        embed = build_embed(actor, action_label)
+        message_id = find_status_card_id()
+        if message_id:
+            edit_channel_message(message_id, embed)
+        else:
+            send_channel_message(embed=embed, with_buttons=True)
     except Exception:
         pass
 
@@ -212,18 +226,17 @@ STATUS_EMBED_TITLES = {"\U0001f534 Apagado", "\U0001f7e1 Encendiendo...", "\U000
 
 
 def _is_session_noise(m: dict[str, Any]) -> bool:
+    # Note: the status card itself (title in STATUS_EMBED_TITLES) is
+    # deliberately NOT treated as noise - it's a persistent message that
+    # gets edited in place (see sync_status_card), never deleted.
     if not (m.get("author") or {}).get("bot"):
         return False
     content = m.get("content") or ""
     if JOIN_LEAVE_RE.match(content) or IDLE_STATUS_RE.match(content):
         return True
     embeds = m.get("embeds") or []
-    if embeds:
-        embed = embeds[0]
-        if START_STOP_RE.search(embed.get("description") or ""):
-            return True
-        if embed.get("title") in STATUS_EMBED_TITLES:
-            return True
+    if embeds and START_STOP_RE.search(embeds[0].get("description") or ""):
+        return True
     return False
 
 
@@ -590,14 +603,10 @@ def notify():
 
     if event == "server_open":
         # The world finished loading after a start (bot, web, or someone
-        # else's /mc start) - sweep the stale "Encendiendo..." embed and
-        # post the real ready-to-play status so people don't have to poll
-        # /mc status themselves to find out.
-        cleanup_join_leave_messages()
-        try:
-            send_channel_message(embed=build_embed(), with_buttons=True)
-        except urllib.error.HTTPError as exc:
-            return f"discord error {exc.code}: {exc.read().decode('utf-8', 'ignore')}", 502
+        # else's /mc start) - sync the persistent status card to the real
+        # ready-to-play state so people don't have to poll /mc status
+        # themselves to find out.
+        sync_status_card()
         return "ok"
 
     messages = {
@@ -626,9 +635,13 @@ def notify():
         return f"discord error {exc.code}: {exc.read().decode('utf-8', 'ignore')}", 502
 
     if event in ("player_join", "player_leave"):
-        # Keep the pinned-feeling status card's player count live instead of
+        # Keep the persistent status card's player count live instead of
         # frozen at whatever it was when it was first posted.
-        refresh_latest_status_embed()
+        sync_status_card()
+    elif event == "server_closed":
+        # Reflect the real "Apagado" state on the card too, instead of
+        # leaving it showing stale "Listo para jugar" data.
+        sync_status_card()
 
     return "ok"
 
@@ -675,12 +688,15 @@ def mc_action(command: str, payload: dict) -> tuple[dict[str, Any], bool]:
 
 
 def send_followup(application_id: str, token: str, msg: dict[str, Any]):
-    data: dict[str, Any] = {}
-    if msg.get("content"):
-        data["content"] = msg["content"]
-    if msg.get("embed"):
-        data["embeds"] = [msg["embed"]]
-    data["components"] = mc_buttons()
+    # Discord's message-edit PATCH only touches fields present in the body,
+    # so content/embeds must always be sent explicitly (even as empty) -
+    # otherwise a content-only reply (e.g. an error) leaves a stale embed
+    # from whatever this message showed before still attached to it.
+    data: dict[str, Any] = {
+        "content": msg.get("content") or "",
+        "embeds": [msg["embed"]] if msg.get("embed") else [],
+        "components": mc_buttons(),
+    }
     body = json.dumps(data).encode("utf-8")
     req = urllib.request.Request(
         f"https://discord.com/api/v10/webhooks/{application_id}/{token}/messages/@original",
