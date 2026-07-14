@@ -149,7 +149,11 @@ def _urlopen_with_rate_limit_retry(req: urllib.request.Request, timeout: float =
     """Discord returns 429 with a JSON body giving how many seconds to
     wait - editing the same status card message repeatedly (join/leave
     spam, or just heavy testing) can hit that limit, and silently
-    swallowing the error would leave the card stuck showing stale data."""
+    swallowing the error would leave the card stuck showing stale data.
+    Also retries plain transient connection errors (broken pipe, reset,
+    etc.) which have been observed sporadically from Cloud Run - those
+    aren't rate limits, just a one-off dropped connection worth one more
+    try before giving up."""
     for attempt in range(max_retries + 1):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -162,6 +166,11 @@ def _urlopen_with_rate_limit_retry(req: urllib.request.Request, timeout: float =
             except Exception:
                 retry_after = 1
             time.sleep(min(float(retry_after), 10) + 0.1)
+        except (BrokenPipeError, ConnectionResetError, urllib.error.URLError, TimeoutError) as exc:
+            if attempt == max_retries:
+                raise
+            print(f"discord request attempt {attempt + 1} failed: {type(exc).__name__}: {exc}", flush=True)
+            time.sleep(1)
 
 
 def edit_channel_message(message_id: str, embed: dict):
