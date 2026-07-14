@@ -673,8 +673,14 @@ def notify():
 
 
 def mc_action(command: str, payload: dict) -> tuple[dict[str, Any], bool]:
-    """Runs an /mc subcommand or button click. Returns (message_kwargs, ephemeral)."""
+    """Runs an /mc subcommand or button click. Returns (message_kwargs, ephemeral).
+    Also syncs the one shared status card as a side effect (see
+    sync_status_card) so the visible state is correct no matter whether
+    this came from a button click (which already edits that card in
+    place as the interaction response) or a typed slash command (whose
+    response is a separate, private message - see interactions())."""
     if command == "status":
+        sync_status_card()
         return {"embed": build_embed()}, False
 
     if command == "ip":
@@ -691,6 +697,7 @@ def mc_action(command: str, payload: dict) -> tuple[dict[str, Any], bool]:
     if command == "start":
         instance = instance_get()
         if instance.get("status") == "RUNNING":
+            sync_status_card()
             return {"embed": build_embed()}, False
         instance_start()
         ip = wait_for_agent()
@@ -699,15 +706,18 @@ def mc_action(command: str, payload: dict) -> tuple[dict[str, Any], bool]:
         container_start(ip, CRAFTY_CONTAINER)
         cleanup_join_leave_messages()
         notify_action(actor, "Encendido")
+        sync_status_card(actor, "Encendido")
         return {"embed": build_embed(actor, "Encendido")}, False
 
     if command == "stop":
         instance = instance_get()
         if instance.get("status") != "RUNNING":
+            sync_status_card()
             return {"embed": build_embed()}, False
         cleanup_join_leave_messages()
         notify_action(actor, "Apagado")
         instance_stop()
+        sync_status_card(actor, "Apagado")
         return {"embed": build_embed(actor, "Apagado")}, False
 
     return {"content": "Comando desconocido."}, True
@@ -778,7 +788,15 @@ def interactions():
             args=(command, payload, payload.get("application_id", ""), payload.get("token", "")),
             daemon=True,
         ).start()
-        return jsonify({"type": DEFERRED_CHANNEL_MESSAGE})
+        ack: dict[str, Any] = {"type": DEFERRED_CHANNEL_MESSAGE}
+        if command in {"start", "stop", "status"}:
+            # These would otherwise post their own separate embed as a
+            # brand new message (Discord always creates a fresh one for a
+            # typed slash command, unlike a button click which edits the
+            # message it lives on) - making it private avoids a second,
+            # un-synced "status card" appearing next to the real one.
+            ack["data"] = {"flags": EPHEMERAL}
+        return jsonify(ack)
 
     if itype == MESSAGE_COMPONENT:
         custom_id = (payload.get("data") or {}).get("custom_id", "")
@@ -1018,7 +1036,9 @@ def api_start():
         return jsonify({"message": "La VM ya esta encendida. Si Minecraft no aparece, espera a que termine de cargar."})
     instance_start()
     cleanup_join_leave_messages()
-    notify_action(claims.get("username") or "alguien (web)", "Encendido")
+    actor = claims.get("username") or "alguien (web)"
+    notify_action(actor, "Encendido")
+    sync_status_card(actor, "Encendido")
     return jsonify({"message": "Encendiendo la VM. El modpack puede tardar 3-8 minutos en quedar listo."})
 
 
@@ -1033,5 +1053,7 @@ def api_stop():
         return jsonify({"message": f"La VM ya esta {instance.get('status', 'apagada')}."})
     instance_stop()
     cleanup_join_leave_messages()
-    notify_action(claims.get("username") or "alguien (web)", "Apagado")
+    actor = claims.get("username") or "alguien (web)"
+    notify_action(actor, "Apagado")
+    sync_status_card(actor, "Apagado")
     return jsonify({"message": "Apagando la VM. El servicio de la VM guarda Minecraft antes de cortar energia."})
