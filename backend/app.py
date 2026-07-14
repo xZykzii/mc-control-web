@@ -142,8 +142,26 @@ def send_channel_message(content: str | None = None, embed: dict | None = None, 
             "User-Agent": "mc-discord-control",
         },
     )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        return resp.read()
+    return _urlopen_with_rate_limit_retry(req)
+
+
+def _urlopen_with_rate_limit_retry(req: urllib.request.Request, timeout: float = 20, max_retries: int = 3):
+    """Discord returns 429 with a JSON body giving how many seconds to
+    wait - editing the same status card message repeatedly (join/leave
+    spam, or just heavy testing) can hit that limit, and silently
+    swallowing the error would leave the card stuck showing stale data."""
+    for attempt in range(max_retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code != 429 or attempt == max_retries:
+                raise
+            try:
+                retry_after = json.loads(exc.read()).get("retry_after", 1)
+            except Exception:
+                retry_after = 1
+            time.sleep(min(float(retry_after), 10) + 0.1)
 
 
 def edit_channel_message(message_id: str, embed: dict):
@@ -161,8 +179,7 @@ def edit_channel_message(message_id: str, embed: dict):
             "User-Agent": "mc-discord-control",
         },
     )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        return resp.read()
+    return _urlopen_with_rate_limit_retry(req)
 
 
 def find_status_card_id() -> str | None:
@@ -178,8 +195,8 @@ def find_status_card_id() -> str | None:
             embeds = m.get("embeds") or []
             if embeds and embeds[0].get("title") in STATUS_EMBED_TITLES:
                 return m["id"]
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"find_status_card_id failed: {type(exc).__name__}: {exc}", flush=True)
     return None
 
 
@@ -195,8 +212,8 @@ def sync_status_card(actor: str | None = None, action_label: str | None = None):
             edit_channel_message(message_id, embed)
         else:
             send_channel_message(embed=embed, with_buttons=True)
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"sync_status_card failed: {type(exc).__name__}: {exc}", flush=True)
 
 
 def notify_action(actor: str, action: str):
