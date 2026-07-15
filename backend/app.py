@@ -197,7 +197,12 @@ def find_status_card_id() -> str | None:
     if not DISCORD_BOT_TOKEN or not DISCORD_NOTIFY_CHANNEL_ID:
         return None
     try:
-        messages = discord_get(f"/channels/{DISCORD_NOTIFY_CHANNEL_ID}/messages?limit=20")
+        # 100 is the max Discord allows per request. A small limit here was
+        # the real bug behind the card getting "lost" and duplicated: any
+        # burst of other channel activity (join/leave spam, or anything
+        # else posting to the channel) pushes the card out of a short
+        # lookback window, and a new one gets created instead of edited.
+        messages = discord_get(f"/channels/{DISCORD_NOTIFY_CHANNEL_ID}/messages?limit=100")
         for m in messages:
             if not (m.get("author") or {}).get("bot"):
                 continue
@@ -855,8 +860,7 @@ def discord_get(path: str, *, user_token: str | None = None) -> Any:
     headers = {"User-Agent": "mc-discord-control"}
     headers["Authorization"] = f"Bearer {user_token}" if user_token else f"Bot {DISCORD_BOT_TOKEN}"
     req = urllib.request.Request(f"https://discord.com/api/v10{path}", headers=headers)
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        return json.loads(resp.read())
+    return json.loads(_urlopen_with_rate_limit_retry(req))
 
 
 def member_permissions_from_roles(role_ids: set[str]) -> int:
