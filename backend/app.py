@@ -201,17 +201,28 @@ def edit_channel_message(message_id: str, embed: dict):
     return _urlopen_with_rate_limit_retry(req)
 
 
+# The status card is a single persistent message. We remember its id in
+# memory so the common path (a join/leave nudging the player count) is a
+# single PATCH, instead of listing 100 channel messages every time just to
+# re-find it. The lock makes the find-or-create atomic: without it, two
+# events arriving together could both see "no card" and both POST one,
+# leaving two cards. Single gunicorn worker + gthread = one shared process,
+# so an in-memory lock is sufficient; the cache is only an optimization and
+# self-heals via the 404 fallback below, so extra workers would at worst
+# cause one redundant search, never a crash.
+_status_card_id: str | None = None
+_status_card_lock = threading.Lock()
+
+
 def find_status_card_id() -> str | None:
-    """Looks for this bot's status card (Apagado/Encendiendo/Listo) in the
-    channel's recent history. Best-effort: returns None on any error."""
+    """Searches the channel's recent history for this bot's status card
+    (Apagado/Encendiendo/Listo). 100 is Discord's per-request max - a
+    smaller window was the original duplication bug, since a burst of
+    other messages could push the card out of view and trigger a new one.
+    Best-effort: returns None on any error."""
     if not DISCORD_BOT_TOKEN or not DISCORD_NOTIFY_CHANNEL_ID:
         return None
     try:
-        # 100 is the max Discord allows per request. A small limit here was
-        # the real bug behind the card getting "lost" and duplicated: any
-        # burst of other channel activity (join/leave spam, or anything
-        # else posting to the channel) pushes the card out of a short
-        # lookback window, and a new one gets created instead of edited.
         messages = discord_get(f"/channels/{DISCORD_NOTIFY_CHANNEL_ID}/messages?limit=100")
         for m in messages:
             if not (m.get("author") or {}).get("bot"):
@@ -225,19 +236,41 @@ def find_status_card_id() -> str | None:
 
 
 def sync_status_card(actor: str | None = None, action_label: str | None = None):
-    """The status card is a single persistent message: this edits it in
-    place if it already exists, or creates it if this is the first time.
-    It is never deleted and reposted, so it can't "disappear" from the
-    channel or lose its place in the scrollback. Best-effort: never raises."""
+    """The status card is a single persistent message: edited in place if it
+    exists, created once if not. Never deleted and reposted, so it can't
+    "disappear" or lose its place in the scrollback. Best-effort: never raises."""
+    global _status_card_id
     try:
         embed = build_embed(actor, action_label)
-        message_id = find_status_card_id()
-        if message_id:
-            edit_channel_message(message_id, embed)
-        else:
-            send_channel_message(embed=embed, with_buttons=True)
     except Exception as exc:
-        print(f"sync_status_card failed: {type(exc).__name__}: {exc}", flush=True)
+        print(f"sync_status_card build_embed failed: {type(exc).__name__}: {exc}", flush=True)
+        return
+
+    with _status_card_lock:
+        try:
+            if _status_card_id:
+                try:
+                    edit_channel_message(_status_card_id, embed)
+                    return
+                except urllib.error.HTTPError as exc:
+                    if exc.code != 404:
+                        raise
+                    # The remembered card was deleted (manual cleanup, channel
+                    # purge, etc.) - forget it and fall through to re-find/create.
+                    _status_card_id = None
+
+            found = find_status_card_id()
+            if found:
+                _status_card_id = found
+                edit_channel_message(found, embed)
+            else:
+                created = send_channel_message(embed=embed, with_buttons=True)
+                try:
+                    _status_card_id = json.loads(created).get("id")
+                except Exception:
+                    _status_card_id = None
+        except Exception as exc:
+            print(f"sync_status_card failed: {type(exc).__name__}: {exc}", flush=True)
 
 
 def notify_action(actor: str, action: str):
