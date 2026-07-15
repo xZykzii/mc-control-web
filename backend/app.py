@@ -142,18 +142,28 @@ def send_channel_message(content: str | None = None, embed: dict | None = None, 
             "User-Agent": "mc-discord-control",
         },
     )
-    return _urlopen_with_rate_limit_retry(req)
+    # POST creates a new message - not safe to retry on a dropped
+    # connection (see _urlopen_with_rate_limit_retry's docstring).
+    return _urlopen_with_rate_limit_retry(req, idempotent=False)
 
 
-def _urlopen_with_rate_limit_retry(req: urllib.request.Request, timeout: float = 20, max_retries: int = 3):
+def _urlopen_with_rate_limit_retry(req: urllib.request.Request, timeout: float = 20, max_retries: int = 3, idempotent: bool = True):
     """Discord returns 429 with a JSON body giving how many seconds to
     wait - editing the same status card message repeatedly (join/leave
     spam, or just heavy testing) can hit that limit, and silently
     swallowing the error would leave the card stuck showing stale data.
-    Also retries plain transient connection errors (broken pipe, reset,
-    etc.) which have been observed sporadically from Cloud Run - those
-    aren't rate limits, just a one-off dropped connection worth one more
-    try before giving up."""
+    That 429 retry is always safe: a 429 means Discord rejected the
+    request outright without acting on it.
+
+    A dropped connection (broken pipe, reset, timeout) is a different
+    story - by the time we see the error, Discord may have already
+    received and processed the request; we just didn't get the response
+    back. Retrying is only safe when idempotent=True (PATCH/GET - editing
+    or reading the same thing twice is harmless). For a POST that creates
+    a new message, retrying on a connection error risks posting a second,
+    duplicate copy of something Discord already accepted - seen in
+    practice as the same join/leave line appearing several times in a
+    row. So non-idempotent (POST) calls don't get that retry."""
     for attempt in range(max_retries + 1):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -167,7 +177,7 @@ def _urlopen_with_rate_limit_retry(req: urllib.request.Request, timeout: float =
                 retry_after = 1
             time.sleep(min(float(retry_after), 10) + 0.1)
         except (BrokenPipeError, ConnectionResetError, urllib.error.URLError, TimeoutError) as exc:
-            if attempt == max_retries:
+            if not idempotent or attempt == max_retries:
                 raise
             print(f"discord request attempt {attempt + 1} failed: {type(exc).__name__}: {exc}", flush=True)
             time.sleep(1)
@@ -633,6 +643,10 @@ def health():
     return "ok"
 
 
+_RECENT_NOTIFY_EVENTS: dict[tuple[str, str], float] = {}
+_DUPLICATE_EVENT_WINDOW_SECONDS = 30  # observed duplicate bursts were ~20s apart
+
+
 @app.post("/notify")
 def notify():
     try:
@@ -644,6 +658,25 @@ def notify():
     event = str(payload.get("event", "")).strip()
     player = str(payload.get("player", "")).strip()
     online = payload.get("online")
+
+    # Safety net against whatever upstream is re-sending the same event
+    # (seen in practice: the same "player left" line reported by the VM's
+    # watcher many times in a row, ~20s apart - root cause not fully
+    # pinned down, but a burst of truly identical events this close
+    # together is never legitimate, so drop the repeats here regardless
+    # of why they're happening).
+    dedup_key = (event, player)
+    now = time.time()
+    last_seen = _RECENT_NOTIFY_EVENTS.get(dedup_key)
+    _RECENT_NOTIFY_EVENTS[dedup_key] = now
+    if len(_RECENT_NOTIFY_EVENTS) > 50:
+        stale_cutoff = now - 60
+        for key, ts in list(_RECENT_NOTIFY_EVENTS.items()):
+            if ts < stale_cutoff:
+                del _RECENT_NOTIFY_EVENTS[key]
+    if last_seen is not None and now - last_seen < _DUPLICATE_EVENT_WINDOW_SECONDS:
+        print(f"notify: dropping duplicate {dedup_key} ({now - last_seen:.1f}s after last)", flush=True)
+        return "ok"
 
     if event == "server_open":
         # The world finished loading after a start (bot, web, or someone
