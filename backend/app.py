@@ -331,27 +331,40 @@ def verify_discord_request(raw_body: bytes):
         raise PermissionError("bad Discord signature") from exc
 
 
+_TRANSIENT_CONNECTION_ERRORS = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError, ssl.SSLError, OSError)
+
+
+def _with_connection_retry(fn, *, max_retries: int = 2):
+    """The Compute Engine client (httplib2) has no retry of its own for a
+    connection dropped mid-request (BrokenPipeError etc.) - it just raises.
+    Seen in practice hitting instance_get() from a /mc start click, which
+    surfaced as a generic "something went wrong" to the user for what was
+    really just a one-off dropped socket worth a quick retry."""
+    for attempt in range(max_retries + 1):
+        try:
+            return fn()
+        except _TRANSIENT_CONNECTION_ERRORS as exc:
+            if attempt == max_retries:
+                raise
+            print(f"{fn.__name__ if hasattr(fn, '__name__') else 'gce call'} attempt {attempt + 1} failed: {type(exc).__name__}: {exc}", flush=True)
+            time.sleep(1)
+
+
 def instance_get() -> dict[str, Any]:
-    return (
-        compute.instances()
-        .get(project=PROJECT_ID, zone=ZONE, instance=INSTANCE)
-        .execute()
+    return _with_connection_retry(
+        lambda: compute.instances().get(project=PROJECT_ID, zone=ZONE, instance=INSTANCE).execute()
     )
 
 
 def instance_start():
-    return (
-        compute.instances()
-        .start(project=PROJECT_ID, zone=ZONE, instance=INSTANCE)
-        .execute()
+    return _with_connection_retry(
+        lambda: compute.instances().start(project=PROJECT_ID, zone=ZONE, instance=INSTANCE).execute()
     )
 
 
 def instance_stop():
-    return (
-        compute.instances()
-        .stop(project=PROJECT_ID, zone=ZONE, instance=INSTANCE)
-        .execute()
+    return _with_connection_retry(
+        lambda: compute.instances().stop(project=PROJECT_ID, zone=ZONE, instance=INSTANCE).execute()
     )
 
 
